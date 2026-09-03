@@ -7,3 +7,6 @@ __pycache__/
 .worktrees/
 dist/
 build/
+
+# Never commit local sentinel config/secrets (~/.config/sentinel)
+
