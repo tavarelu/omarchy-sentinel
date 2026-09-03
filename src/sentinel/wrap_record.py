@@ -73,7 +73,12 @@ def launch_to_alert(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI: python -m sentinel.wrap_record <basename> [--] <args...>"""
+    """CLI: python -m sentinel.wrap_record <basename> [--] <args...>
+
+    Optional env:
+      SENTINEL_LAUNCH_PID — wrapper shell PID (survives exec into the real binary)
+      SENTINEL_REAL_<NAME> — real executable path recorded as exe
+    """
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
         print(
@@ -85,7 +90,14 @@ def main(argv: list[str] | None = None) -> int:
     if args and args[0] == "--":
         args.pop(0)
     exe = os.environ.get(f"SENTINEL_REAL_{_env_name(basename)}", "")
-    record_launch(basename, args, exe=exe or None)
+    pid: int | None = None
+    pid_s = os.environ.get("SENTINEL_LAUNCH_PID")
+    if pid_s:
+        try:
+            pid = int(pid_s)
+        except ValueError:
+            pid = None
+    record_launch(basename, args, exe=exe or None, pid=pid)
     return 0
 
 

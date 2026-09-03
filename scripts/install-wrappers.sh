@@ -26,6 +26,7 @@ fi
 mkdir -p "$BIN_DIR"
 
 backup_if_needed() {
+  # Prints backup path on stdout when a non-shim target is moved; else prints nothing.
   local target="$1"
   if [[ ! -e "$target" ]]; then
     return 0
@@ -34,11 +35,12 @@ backup_if_needed() {
   if [[ -f "$target" ]] && head -n 5 "$target" 2>/dev/null | grep -q 'sentinel-wrap'; then
     return 0
   fi
-  local ts
+  local ts bak
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
-  local bak="${target}.sentinel-bak.${ts}"
+  bak="${target}.sentinel-bak.${ts}"
   mv -n -- "$target" "$bak"
-  echo "backed up existing $(basename "$target") → $bak"
+  echo "backed up existing $(basename "$target") → $bak" >&2
+  printf '%s\n' "$bak"
 }
 
 # Resolve the current real binary before we put a shim on PATH.
@@ -85,7 +87,15 @@ for name in "$@"; do
     echo "install-wrappers: warning: no existing '$name' on PATH; shim will need SENTINEL_REAL_$(env_key "$name")" >&2
   fi
 
-  backup_if_needed "$target"
+  # If the only real binary lived at $target, backup moves it — retarget SENTINEL_REAL.
+  real_was_target=0
+  if [[ -n "$real" && "$real" == "$target" ]]; then
+    real_was_target=1
+  fi
+  bak_path="$(backup_if_needed "$target")"
+  if [[ "$real_was_target" -eq 1 && -n "$bak_path" ]]; then
+    real="$bak_path"
+  fi
 
   {
     echo '#!/usr/bin/env bash'

@@ -80,7 +80,8 @@ if [[ -z "$PY" ]]; then
   fi
 fi
 if [[ -n "$PY" ]]; then
-  "$PY" -m sentinel.wrap_record "$BASE" -- "$@" || true
+  # $$ is this wrapper shell; exec below replaces it with the real agent binary.
+  SENTINEL_LAUNCH_PID=$$ "$PY" -m sentinel.wrap_record "$BASE" -- "$@" || true
 fi
 
 exec "$REAL" "$@"
