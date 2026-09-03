@@ -63,6 +63,45 @@ def test_rself_alerts_even_from_editor(tmp_path):
     assert alert is not None and alert.rule == "R-SELF"
 
 
+def test_rself_non_sentinel_writers_alert(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text("x=1\n")
+    for exe in ("/usr/bin/nano", "/usr/bin/touch"):
+        alert = evaluate_write(
+            p, writer_pid=9, writer_exe=exe, self_paths=[tmp_path]
+        )
+        assert alert is not None and alert.rule == "R-SELF", exe
+
+
+def test_rself_sentinel_writer_ignored(tmp_path):
+    p = tmp_path / "watchlist.json"
+    p.write_text("{}\n")
+    for exe in (
+        "/usr/bin/sentinel",
+        "/usr/local/bin/sentinel-daemon",
+        "/home/x/.local/bin/sentinel-scout",
+    ):
+        assert (
+            evaluate_write(p, writer_pid=1, writer_exe=exe, self_paths=[tmp_path])
+            is None
+        ), exe
+
+
+def test_rself_python_module_sentinel_ignored(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text("x=1\n")
+    assert (
+        evaluate_write(
+            p,
+            writer_pid=2,
+            writer_exe="/usr/bin/python3",
+            self_paths=[tmp_path],
+            writer_cmdline=["python3", "-m", "sentinel.cli", "scout"],
+        )
+        is None
+    )
+
+
 def test_rhook_write_non_editor(tmp_path):
     watch = tmp_path / "hooks"
     watch.mkdir()

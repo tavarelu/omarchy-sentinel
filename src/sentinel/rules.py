@@ -111,6 +111,28 @@ def _is_editor(
     return _basename(writer_exe) in editor_allowlist
 
 
+def _is_sentinel_writer(
+    writer_exe: str | None,
+    writer_cmdline: Sequence[str] | None = None,
+) -> bool:
+    """True when the writer is Sentinel itself (skip R-SELF)."""
+    base = _basename(writer_exe).lower()
+    if base.startswith("sentinel"):
+        return True
+    # python -m sentinel… / python …/sentinel/…
+    if base.startswith("python"):
+        tokens = [t.lower() for t in (writer_cmdline or ())]
+        for i, tok in enumerate(tokens):
+            if tok in ("-m", "--module") and i + 1 < len(tokens):
+                if tokens[i + 1] == "sentinel" or tokens[i + 1].startswith(
+                    "sentinel."
+                ):
+                    return True
+            if "sentinel" in tok.replace("\\", "/").split("/"):
+                return True
+    return False
+
+
 def evaluate_write(
     path: Path,
     writer_pid: int | None,
@@ -119,6 +141,7 @@ def evaluate_write(
     self_paths: Sequence[Path] | None = None,
     watch_paths: Sequence[Path] | None = None,
     editor_allowlist: frozenset[str] | set[str] | None = None,
+    writer_cmdline: Sequence[str] | None = None,
 ) -> Alert | None:
     path = Path(path)
     editors = (
@@ -130,6 +153,8 @@ def evaluate_write(
     paths = [str(path.resolve())]
 
     if self_paths and _path_under(path, self_paths):
+        if _is_sentinel_writer(writer_exe, writer_cmdline):
+            return None
         return Alert.new(
             rule="R-SELF",
             severity="high",
@@ -137,7 +162,7 @@ def evaluate_write(
             pids=[writer_pid] if writer_pid is not None else [],
             exe=writer_exe or "",
             basename=writer_base,
-            cmdline=[],
+            cmdline=list(writer_cmdline) if writer_cmdline is not None else [],
             cwd="",
             evidence={"path": paths[0]},
             paths=paths,
