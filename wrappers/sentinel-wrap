@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# wrappers/sentinel-wrap — usage: sentinel-wrap <basename> [--] "$@"
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+  echo "usage: sentinel-wrap <basename> [--] args..." >&2
+  exit 2
+fi
+
+BASE="$1"
+shift
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+
+env_key() {
+  # claude → CLAUDE ; my-cli → MY_CLI
+  echo "$1" | tr '[:lower:]-' '[:upper:]_'
+}
+
+WRAP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$WRAP_DIR/.." && pwd)"
+ENV_NAME="$(env_key "$BASE")"
+REAL_VAR="SENTINEL_REAL_${ENV_NAME}"
+
+# Prefer packaged install; fall back to checkout layout / local venv.
+if [[ -d "$REPO_ROOT/src/sentinel" ]]; then
+  export PYTHONPATH="${REPO_ROOT}/src${PYTHONPATH:+:$PYTHONPATH}"
+fi
+if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
+  SENTINEL_PYTHON="${SENTINEL_PYTHON:-$REPO_ROOT/.venv/bin/python}"
+fi
+
+resolve_real() {
+  local candidate
+  if [[ -n "${!REAL_VAR:-}" && -x "${!REAL_VAR}" ]]; then
+    printf '%s\n' "${!REAL_VAR}"
+    return 0
+  fi
+  local self
+  self="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
+  local -a path_dirs
+  IFS=':' read -r -a path_dirs <<< "${PATH:-}"
+  local dir
+  for dir in "${path_dirs[@]}"; do
+    [[ -z "$dir" ]] && continue
+    candidate="${dir%/}/$BASE"
+    [[ -x "$candidate" && -f "$candidate" ]] || continue
+    # Skip this wrappers dir and the shim itself.
+    case "$candidate" in
+      "$WRAP_DIR"/*) continue ;;
+    esac
+    if [[ "$(readlink -f "$candidate" 2>/dev/null || echo "$candidate")" == "$self" ]]; then
+      continue
+    fi
+    # Skip shims that re-invoke sentinel-wrap (installed ~/.local/bin/<name>).
+    if head -n 5 "$candidate" 2>/dev/null | grep -q 'sentinel-wrap'; then
+      continue
+    fi
+    printf '%s\n' "$candidate"
+    return 0
+  done
+  return 1
+}
+
+REAL="$(resolve_real)" || {
+  echo "sentinel-wrap: could not find real binary for '$BASE' (set $REAL_VAR)" >&2
+  exit 127
+}
+
+export "$REAL_VAR=$REAL"
+
+# Best-effort record; never block the real launch on recorder failure.
+PY="${SENTINEL_PYTHON:-}"
+if [[ -z "$PY" ]]; then
+  if command -v python3 >/dev/null 2>&1; then
+    PY=python3
+  elif command -v python >/dev/null 2>&1; then
+    PY=python
+  fi
+fi
+if [[ -n "$PY" ]]; then
+  "$PY" -m sentinel.wrap_record "$BASE" -- "$@" || true
+fi
+
+exec "$REAL" "$@"
