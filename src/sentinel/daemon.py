@@ -1,0 +1,601 @@
+from __future__ import annotations
+
+import ctypes
+import json
+import os
+import select
+import struct
+import time
+import tomllib
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from sentinel.allowlist import fingerprint, is_allowed
+from sentinel.models import Alert
+from sentinel.paths import config_dir, default_config_path, state_dir
+from sentinel.rules import evaluate_process, evaluate_write
+from sentinel.scout import WATCHLIST_FILENAME, scout, write_watchlist
+from sentinel.store import append_alert
+from sentinel.wrap_record import LAUNCHES_FILENAME, launch_to_alert, launches_path
+
+SAMPLER_MIN = 2.0
+SAMPLER_MAX = 5.0
+DEFAULT_SAMPLER_INTERVAL = 3.0
+DEFAULT_COALESCE_WINDOW = 60.0
+
+DEFAULT_AGENT_BASENAMES: frozenset[str] = frozenset(
+    {
+        "claude",
+        "codex",
+        "cursor",
+        "cursor-agent",
+        "grok",
+    }
+)
+
+WATCH_KINDS = frozenset({"hooks", "settings", "mcp", "auth"})
+OPERATIONAL_NAMES = frozenset({"alerts.jsonl", "launches.jsonl", "health.json"})
+
+# inotify_init1 flags share values with open(2).
+IN_CLOEXEC = int(getattr(os, "O_CLOEXEC", 0x80000))
+IN_NONBLOCK = int(getattr(os, "O_NONBLOCK", 0x800))
+IN_CLOSE_WRITE = 0x00000008
+IN_MOVED_TO = 0x00000080
+IN_CREATE = 0x00000100
+IN_DELETE = 0x00000200
+IN_DELETE_SELF = 0x00000400
+IN_MOVE_SELF = 0x00000800
+IN_Q_OVERFLOW = 0x00004000
+IN_IGNORED = 0x00008000
+IN_ISDIR = 0x40000000
+
+WATCH_MASK = (
+    IN_CLOSE_WRITE
+    | IN_MOVED_TO
+    | IN_CREATE
+    | IN_DELETE
+    | IN_DELETE_SELF
+    | IN_MOVE_SELF
+)
+
+_EVENT_HDR = struct.Struct("iIII")
+_LIBC: ctypes.CDLL | None = None
+
+
+def _clamp_interval(value: float) -> float:
+    return min(SAMPLER_MAX, max(SAMPLER_MIN, float(value)))
+
+
+def _libc() -> ctypes.CDLL:
+    global _LIBC
+    if _LIBC is None:
+        lib = ctypes.CDLL(None, use_errno=True)
+        lib.inotify_init1.argtypes = [ctypes.c_int]
+        lib.inotify_init1.restype = ctypes.c_int
+        lib.inotify_add_watch.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint32,
+        ]
+        lib.inotify_add_watch.restype = ctypes.c_int
+        _LIBC = lib
+    return _LIBC
+
+
+def _oserror(path: str | None = None) -> OSError:
+    err = ctypes.get_errno()
+    return OSError(err, os.strerror(err), path)
+
+
+class Coalescer:
+    """Suppress duplicate alert keys inside a sliding window."""
+
+    def __init__(
+        self,
+        window_sec: float = DEFAULT_COALESCE_WINDOW,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.window_sec = float(window_sec)
+        self._clock = clock
+        self._last: dict[str, float] = {}
+
+    def should_emit(self, key: str) -> bool:
+        now = self._clock()
+        prev = self._last.get(key)
+        if prev is not None and (now - prev) < self.window_sec:
+            return False
+        if len(self._last) > 256:
+            cutoff = now - self.window_sec
+            self._last = {k: t for k, t in self._last.items() if t > cutoff}
+        self._last[key] = now
+        return True
+
+
+@dataclass(frozen=True)
+class InotifyEvent:
+    wd: int
+    mask: int
+    cookie: int
+    name: str
+
+
+class Inotify:
+    """Thin libc inotify wrapper (stdlib ctypes, no extra deps)."""
+
+    def __init__(self) -> None:
+        fd = _libc().inotify_init1(IN_CLOEXEC | IN_NONBLOCK)
+        if fd < 0:
+            raise _oserror()
+        self.fd = fd
+        self.wd_to_path: dict[int, Path] = {}
+
+    def add_watch(self, path: Path | str, mask: int = WATCH_MASK) -> int:
+        path = Path(path)
+        wd = _libc().inotify_add_watch(self.fd, os.fsencode(str(path)), mask)
+        if wd < 0:
+            raise _oserror(str(path))
+        self.wd_to_path[wd] = path
+        return wd
+
+    def read_events(self) -> list[InotifyEvent]:
+        try:
+            data = os.read(self.fd, 65536)
+        except BlockingIOError:
+            return []
+        events: list[InotifyEvent] = []
+        offset = 0
+        hdr_size = _EVENT_HDR.size
+        while offset + hdr_size <= len(data):
+            wd, mask, cookie, name_len = _EVENT_HDR.unpack_from(data, offset)
+            end = offset + hdr_size + name_len
+            if end > len(data):
+                break
+            name = ""
+            if name_len:
+                raw = data[offset + hdr_size : end]
+                name = raw.split(b"\x00", 1)[0].decode("utf-8", "surrogateescape")
+            events.append(InotifyEvent(wd=wd, mask=mask, cookie=cookie, name=name))
+            offset = end
+        return events
+
+    def close(self) -> None:
+        if self.fd >= 0:
+            os.close(self.fd)
+            self.fd = -1
+        self.wd_to_path.clear()
+
+
+def watch_roots_from_entries(entries: Iterable[Mapping[str, Any]]) -> list[Path]:
+    """Watch listed hooks/settings/mcp/auth files plus hook parent dirs."""
+    roots: list[Path] = []
+    seen: set[Path] = set()
+    for entry in entries:
+        kind = entry.get("kind")
+        if kind not in WATCH_KINDS:
+            continue
+        path = Path(entry["path"])
+        if path not in seen:
+            seen.add(path)
+            roots.append(path)
+        if kind == "hooks":
+            parent = path.parent
+            if parent not in seen:
+                seen.add(parent)
+                roots.append(parent)
+    return roots
+
+
+def refresh_watchlist(home: Path | None = None) -> Path:
+    result = scout(Path(home) if home is not None else Path.home())
+    return write_watchlist(result)
+
+
+def load_config(
+    path: Path | None = None,
+    *,
+    defaults: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    cfg: dict[str, Any] = {
+        "sampler_interval": DEFAULT_SAMPLER_INTERVAL,
+        "coalesce_window": DEFAULT_COALESCE_WINDOW,
+        "extra_bypass_flags": [],
+        "known_basenames": sorted(DEFAULT_AGENT_BASENAMES),
+        "inotify": True,
+    }
+    if defaults:
+        cfg.update(dict(defaults))
+    cfg_path = path
+    if cfg_path is None and defaults is None:
+        candidate = default_config_path()
+        if candidate.is_file():
+            cfg_path = candidate
+    if cfg_path is not None and Path(cfg_path).is_file():
+        with Path(cfg_path).open("rb") as f:
+            data = tomllib.load(f)
+        section = data.get("daemon", data)
+        if isinstance(section, dict):
+            for key in (
+                "sampler_interval",
+                "coalesce_window",
+                "extra_bypass_flags",
+                "known_basenames",
+            ):
+                if key in section:
+                    cfg[key] = section[key]
+    cfg["sampler_interval"] = _clamp_interval(
+        cfg.get("sampler_interval", DEFAULT_SAMPLER_INTERVAL)
+    )
+    cfg["coalesce_window"] = float(
+        cfg.get("coalesce_window", DEFAULT_COALESCE_WINDOW)
+    )
+    return cfg
+
+
+def coalesce_key(alert: Alert) -> str:
+    loc = alert.cwd or (alert.paths[0] if alert.paths else "")
+    return f"{alert.rule}|{alert.basename}|{loc}"
+
+
+def _flag_set(alert: Alert) -> frozenset[str]:
+    flags = alert.evidence.get("flags")
+    if isinstance(flags, list):
+        return frozenset(str(x) for x in flags)
+    flag = alert.evidence.get("flag")
+    if flag:
+        return frozenset({str(flag)})
+    return frozenset()
+
+
+def _is_alert_allowed(alert: Alert) -> bool:
+    flags = _flag_set(alert)
+    cwd = alert.cwd or (alert.paths[0] if alert.paths else "")
+    if not cwd:
+        return is_allowed(
+            fingerprint(alert.rule, alert.basename, flags, ""),
+            "",
+        )
+    path = Path(cwd)
+    for prefix in (str(path), *(str(p) for p in path.parents)):
+        fp = fingerprint(alert.rule, alert.basename, flags, prefix)
+        if is_allowed(fp, cwd):
+            return True
+    return False
+
+
+def _readlink(path: Path) -> str:
+    try:
+        return os.readlink(path)
+    except OSError:
+        return ""
+
+
+def _read_cmdline(pid_dir: Path) -> list[str]:
+    try:
+        raw = (pid_dir / "cmdline").read_bytes()
+    except OSError:
+        return []
+    if not raw:
+        return []
+    return [p.decode("utf-8", "surrogateescape") for p in raw.split(b"\0") if p]
+
+
+def _noop_notify(alert: Alert) -> None:
+    return None
+
+
+class Daemon:
+    def __init__(self, config: Mapping[str, Any] | None = None) -> None:
+        cfg = dict(config or {})
+        self.sampler_interval = _clamp_interval(
+            cfg.get("sampler_interval", DEFAULT_SAMPLER_INTERVAL)
+        )
+        window = float(cfg.get("coalesce_window", DEFAULT_COALESCE_WINDOW))
+        clock = cfg.get("clock", time.monotonic)
+        self.coalescer = Coalescer(window_sec=window, clock=clock)
+        self._extra_flags = list(cfg.get("extra_bypass_flags") or [])
+        known = cfg.get("known_basenames")
+        self._known = (
+            set(known) if known is not None else set(DEFAULT_AGENT_BASENAMES)
+        )
+        self._notify: Callable[[Alert], None] = cfg.get("notify") or _noop_notify
+        self._stop = cfg.get("stop")
+        self._proc_root = Path(cfg.get("proc_root", "/proc"))
+        self._home = Path(cfg.get("home", Path.home()))
+        self._enable_inotify = bool(cfg.get("inotify", True))
+        self._watch_override = (
+            [Path(p) for p in cfg["watch_paths"]] if "watch_paths" in cfg else None
+        )
+        self._self_override = (
+            [Path(p) for p in cfg["self_paths"]] if "self_paths" in cfg else None
+        )
+        self._watch_roots: list[Path] = list(self._watch_override or [])
+        self._inotify: Inotify | None = None
+        self._self_refresh = False
+        path = launches_path()
+        try:
+            self._launches_offset = path.stat().st_size if path.exists() else 0
+        except OSError:
+            self._launches_offset = 0
+
+    def _stopped(self) -> bool:
+        return self._stop is not None and self._stop.is_set()
+
+    def _self_paths(self) -> list[Path]:
+        if self._self_override is not None:
+            return list(self._self_override)
+        return [config_dir(), state_dir()]
+
+    def _load_watch_paths(self) -> None:
+        if self._watch_override is not None:
+            self._watch_roots = list(self._watch_override)
+            return
+        path = state_dir() / WATCHLIST_FILENAME
+        if not path.exists():
+            self._watch_roots = []
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            self._watch_roots = []
+            return
+        self._watch_roots = watch_roots_from_entries(data.get("paths") or [])
+
+    def _ensure_watchlist(self) -> None:
+        if self._watch_override is not None:
+            self._watch_roots = list(self._watch_override)
+            return
+        state_dir().mkdir(parents=True, exist_ok=True)
+        config_dir().mkdir(parents=True, exist_ok=True)
+        if not (state_dir() / WATCHLIST_FILENAME).exists():
+            self._self_refresh = True
+            try:
+                refresh_watchlist(self._home)
+            finally:
+                self._self_refresh = False
+        self._load_watch_paths()
+
+    def _dirs_to_watch(self) -> list[Path]:
+        dirs: set[Path] = set()
+        if self._self_override is None:
+            for path in (config_dir(), state_dir()):
+                try:
+                    path.mkdir(parents=True, exist_ok=True)
+                except OSError:
+                    continue
+        for raw in [*self._self_paths(), *self._watch_roots]:
+            path = Path(raw)
+            try:
+                if path.is_dir():
+                    dirs.add(path.resolve())
+                elif path.parent.is_dir():
+                    dirs.add(path.parent.resolve())
+            except OSError:
+                continue
+        return sorted(dirs)
+
+    def _close_inotify(self) -> None:
+        if self._inotify is not None:
+            self._inotify.close()
+            self._inotify = None
+
+    def _rebuild_watches(self) -> None:
+        self._close_inotify()
+        if not self._enable_inotify:
+            return
+        try:
+            self._inotify = Inotify()
+        except OSError:
+            self._inotify = None
+            return
+        for directory in self._dirs_to_watch():
+            try:
+                self._inotify.add_watch(directory)
+            except OSError:
+                continue
+
+    def emit(self, alert: Alert) -> None:
+        if _is_alert_allowed(alert):
+            return
+        if not self.coalescer.should_emit(coalesce_key(alert)):
+            return
+        append_alert(alert)
+        self._notify(alert)
+
+    def handle_write(
+        self,
+        path: Path,
+        writer_pid: int | None = None,
+        writer_exe: str | None = None,
+        writer_cmdline: Sequence[str] | None = None,
+    ) -> None:
+        path = Path(path)
+        if path.name in OPERATIONAL_NAMES:
+            return
+        if path.name == WATCHLIST_FILENAME and self._self_refresh:
+            return
+        alert = evaluate_write(
+            path,
+            writer_pid,
+            writer_exe,
+            self_paths=self._self_paths(),
+            watch_paths=self._watch_roots,
+            writer_cmdline=writer_cmdline,
+        )
+        if alert is None:
+            return
+        self.emit(alert)
+
+    def handle_process(
+        self,
+        cmdline: list[str],
+        exe: str,
+        cwd: str,
+        pid: int | None = None,
+        parent: dict[str, Any] | None = None,
+    ) -> None:
+        alert = evaluate_process(
+            cmdline,
+            exe,
+            cwd,
+            extra_bypass_flags=self._extra_flags,
+        )
+        if alert is None:
+            return
+        if pid is not None:
+            alert.pids = [int(pid)]
+        if parent is not None:
+            alert.parent = parent
+        self.emit(alert)
+
+    def handle_overflow(self) -> None:
+        alert = Alert.new(
+            rule="R-SELF",
+            severity="medium",
+            summary="inotify queue overflow; refreshing watchlist",
+            pids=[],
+            exe="",
+            basename="inotify",
+            cmdline=[],
+            cwd="",
+            evidence={"event": "IN_Q_OVERFLOW"},
+        )
+        self.emit(alert)
+        self._self_refresh = True
+        try:
+            refresh_watchlist(self._home)
+            if self._watch_override is None:
+                self._load_watch_paths()
+            if self._inotify is not None:
+                self._rebuild_watches()
+        finally:
+            self._self_refresh = False
+
+    def consume_launches(self) -> None:
+        path = launches_path()
+        if not path.exists():
+            return
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return
+        if size < self._launches_offset:
+            self._launches_offset = 0
+        try:
+            with path.open(encoding="utf-8") as f:
+                f.seek(self._launches_offset)
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    alert = launch_to_alert(
+                        record,
+                        extra_bypass_flags=self._extra_flags,
+                    )
+                    if alert is not None:
+                        self.emit(alert)
+                self._launches_offset = f.tell()
+        except OSError:
+            return
+
+    def sample_proc(self) -> None:
+        root = self._proc_root
+        if not root.is_dir():
+            return
+        our_pid = os.getpid()
+        try:
+            pid_dirs = list(root.iterdir())
+        except OSError:
+            return
+        for pid_dir in pid_dirs:
+            name = pid_dir.name
+            if not name.isdigit():
+                continue
+            pid = int(name)
+            if pid == our_pid:
+                continue
+            cmdline = _read_cmdline(pid_dir)
+            if not cmdline:
+                continue
+            exe = _readlink(pid_dir / "exe")
+            basename = Path(exe).name if exe else Path(cmdline[0]).name
+            if self._known and basename not in self._known:
+                continue
+            cwd = _readlink(pid_dir / "cwd")
+            self.handle_process(cmdline, exe or cmdline[0], cwd, pid=pid)
+
+    def tick(self) -> None:
+        self.consume_launches()
+        self.sample_proc()
+
+    def _on_fs_event(self, path: Path, mask: int) -> None:
+        if path.name == LAUNCHES_FILENAME:
+            self.consume_launches()
+            return
+        if path.name in OPERATIONAL_NAMES:
+            return
+        self.handle_write(path)
+
+    def _drain_inotify(self) -> None:
+        if self._inotify is None:
+            return
+        overflow = False
+        for event in self._inotify.read_events():
+            if event.mask & IN_Q_OVERFLOW:
+                overflow = True
+                continue
+            base = self._inotify.wd_to_path.get(event.wd)
+            if base is None:
+                continue
+            path = (base / event.name) if event.name else base
+            if event.mask & IN_CREATE and event.mask & IN_ISDIR:
+                try:
+                    self._inotify.add_watch(path)
+                except OSError:
+                    pass
+            if event.mask & (IN_DELETE_SELF | IN_MOVE_SELF | IN_IGNORED):
+                self._inotify.wd_to_path.pop(event.wd, None)
+                continue
+            self._on_fs_event(path, event.mask)
+        if overflow:
+            self.handle_overflow()
+
+    def run(self) -> None:
+        if not self._stopped():
+            self._ensure_watchlist()
+            self._rebuild_watches()
+        try:
+            while not self._stopped():
+                timeout = self.sampler_interval
+                ino = self._inotify
+                if ino is not None and ino.fd >= 0:
+                    ready, _, _ = select.select([ino.fd], [], [], timeout)
+                    if self._stopped():
+                        break
+                    if ready:
+                        self._drain_inotify()
+                elif self._stop is not None:
+                    self._stop.wait(timeout)
+                else:
+                    time.sleep(timeout)
+                if self._stopped():
+                    break
+                self.tick()
+        finally:
+            self._close_inotify()
+
+
+def run_forever(config: Mapping[str, Any] | None = None) -> None:
+    if config is None:
+        config = load_config()
+    Daemon(config).run()
+
+
+if __name__ == "__main__":
+    run_forever()

@@ -8,7 +8,33 @@ from sentinel.scout import scout, write_watchlist
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="sentinel")
-    parser.parse_args(argv)
+    sub = parser.add_subparsers(dest="command")
+    daemon_p = sub.add_parser(
+        "daemon",
+        aliases=["run"],
+        help="Run inotify + process sampler loop",
+    )
+    daemon_p.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Path to config.toml (default: XDG config)",
+    )
+    daemon_p.add_argument(
+        "--interval",
+        type=float,
+        default=None,
+        help="Sampler interval in seconds (clamped to 2-5)",
+    )
+    args = parser.parse_args(argv)
+    if args.command in {"daemon", "run"}:
+        from sentinel.daemon import load_config, run_forever
+
+        config = load_config(args.config)
+        if args.interval is not None:
+            config["sampler_interval"] = args.interval
+        run_forever(config)
+        return 0
     parser.print_help()
     return 0
 
