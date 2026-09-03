@@ -83,15 +83,18 @@ def test_launch_to_alert_none_without_flags():
     )
 
 
-def test_main_uses_sentinel_launch_pid(tmp_path, monkeypatch):
+def test_main_uses_sentinel_launch_pid_and_ppid(tmp_path, monkeypatch):
     from sentinel.wrap_record import main
 
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     monkeypatch.setenv("SENTINEL_LAUNCH_PID", "4242")
+    monkeypatch.setenv("SENTINEL_LAUNCH_PPID", "1001")
     monkeypatch.setenv("SENTINEL_REAL_CLAUDE", "/usr/bin/claude")
     assert main(["claude", "--", "--dangerously-skip-permissions"]) == 0
     path = tmp_path / "sentinel" / "launches.jsonl"
     loaded = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
     assert loaded["pid"] == 4242
+    assert loaded["ppid"] == 1001
+    assert loaded["pid"] != loaded["ppid"]
     assert loaded["exe"] == "/usr/bin/claude"
     assert "--dangerously-skip-permissions" in loaded["flags"]

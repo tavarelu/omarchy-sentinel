@@ -77,6 +77,7 @@ def main(argv: list[str] | None = None) -> int:
 
     Optional env:
       SENTINEL_LAUNCH_PID — wrapper shell PID (survives exec into the real binary)
+      SENTINEL_LAUNCH_PPID — parent of the wrapper shell ($PPID)
       SENTINEL_REAL_<NAME> — real executable path recorded as exe
     """
     args = list(sys.argv[1:] if argv is None else argv)
@@ -90,15 +91,20 @@ def main(argv: list[str] | None = None) -> int:
     if args and args[0] == "--":
         args.pop(0)
     exe = os.environ.get(f"SENTINEL_REAL_{_env_name(basename)}", "")
-    pid: int | None = None
-    pid_s = os.environ.get("SENTINEL_LAUNCH_PID")
-    if pid_s:
-        try:
-            pid = int(pid_s)
-        except ValueError:
-            pid = None
-    record_launch(basename, args, exe=exe or None, pid=pid)
+    pid = _env_int("SENTINEL_LAUNCH_PID")
+    ppid = _env_int("SENTINEL_LAUNCH_PPID")
+    record_launch(basename, args, exe=exe or None, pid=pid, ppid=ppid)
     return 0
+
+
+def _env_int(name: str) -> int | None:
+    raw = os.environ.get(name)
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 def _env_name(basename: str) -> str:
