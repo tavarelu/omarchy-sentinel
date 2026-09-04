@@ -8,7 +8,7 @@ Updated by Chief only. Grok reads it; Grok never edits it.
 | HEAD at last update | `c015834` |
 | Last reviewed range | `..4ebfb5d` (wave 1, R&D + Chief) |
 | Unreviewed commits | `e0f2c86`, `30533f6`, `c015834` (wave 2, no R&D audit) |
-| Tests | 116 passed |
+| Tests | 116 passed on feature; 127 on claude/W3-01 |
 | Live install | none; no units, hooks, shims, or menu rows installed |
 | Canonical checkout | `~/Work/sentinel` at `1161091` (docs only, no venv); all code is on the feature branch in this worktree |
 
@@ -16,7 +16,7 @@ Updated by Chief only. Grok reads it; Grok never edits it.
 
 | ID | Title | State | Branch | Report | Verdict |
 |----|-------|-------|--------|--------|---------|
-| W3-01 | Allowlist and Approve correctness | written | | | |
+| W3-01 | Allowlist and Approve correctness | reported (Chief implemented) | claude/W3-01 | reports/W3-01-report.md | awaiting Grok review |
 | W3-02 | One alert per process instance, safe kill, store hygiene | written | | | |
 | W3-03 | Scout v2 | written | | | |
 | W3-04 | Wire R-CHILD-SHELL | written, waits for W3-02 | | | |

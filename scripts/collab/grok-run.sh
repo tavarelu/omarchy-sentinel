@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run one task packet with Grok Build headless in an isolated branch + worktree.
-# Usage: scripts/collab/grok-run.sh <PACKET-ID> [--dry-run] [--max-turns N] [--lean]
+# Usage: scripts/collab/grok-run.sh <PACKET-ID> [--dry-run] [--max-turns N] [--lean] [--resume]
+# --resume continues the packet's previous Grok session (for a RETURNed packet) instead of starting fresh.
 # Grok usage is metered: the run preflights connectivity so it cannot burn quota retrying,
 # defaults to 40 turns, and --lean disables subagents for small packets.
 # Creates branch grok/<ID> from the current branch, a worktree at .worktrees/grok-<ID>,
@@ -13,12 +14,13 @@ if [[ $# -lt 1 ]]; then
   exit 2
 fi
 ID="$1"; shift
-DRY=0; MAX_TURNS=40; LEAN=0
+DRY=0; MAX_TURNS=40; LEAN=0; RESUME=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY=1; shift ;;
     --max-turns) MAX_TURNS="$2"; shift 2 ;;
     --lean) LEAN=1; shift ;;
+    --resume) RESUME=1; shift ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -37,6 +39,15 @@ mkdir -p "$RUN_DIR"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT_JSON="$RUN_DIR/$ID-$STAMP.json"
 PROMPT_FILE="$RUN_DIR/$ID-$STAMP.prompt.md"
+SESSION_FILE="$RUN_DIR/$ID.session"
+# Grok 1.0.13: -s needs a fresh UUID for a NEW session; reuse goes through -r <uuid>.
+if [[ "$RESUME" -eq 1 && -s "$SESSION_FILE" ]]; then
+  SESSION_ARGS=(-r "$(cat "$SESSION_FILE")")
+else
+  SID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+  printf '%s\n' "$SID" >"$SESSION_FILE"
+  SESSION_ARGS=(-s "$SID")
+fi
 
 cat >"$PROMPT_FILE" <<PROMPT
 You are the Lead Developer. Read AGENTS.md and docs/collab/PROTOCOL.md, then execute packet $ID at docs/collab/packets/$(basename "$PACKET").
@@ -47,7 +58,7 @@ PROMPT
 
 CMD=(grok --prompt-file "$PROMPT_FILE" --cwd "$WT_DIR"
   --output-format json --permission-mode dontAsk --sandbox workspace
-  --max-turns "$MAX_TURNS" --effort high -s "sentinel-$ID"
+  --max-turns "$MAX_TURNS" --effort high "${SESSION_ARGS[@]}"
   --allow "Read" --allow "Grep" --allow "Edit" --allow "Write"
   --allow "Bash(git*)" --allow "Bash(.venv/bin/*)" --allow "Bash(python*)"
   --allow "Bash(pytest*)" --allow "Bash(ls*)" --allow "Bash(cat*)" --allow "Bash(grep*)"
