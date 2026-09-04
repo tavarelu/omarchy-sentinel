@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sentinel.allowlist import SCOPES, approve, fingerprint
+from sentinel.investigate import page_detail
 from sentinel.kill import execute_kill, plan_kill
 from sentinel.models import Alert
 from sentinel.paths import default_config_path, state_dir
@@ -20,6 +21,7 @@ COMMANDS = frozenset(
         "approve",
         "kill",
         "investigate",
+        "summarize",
         "dismiss",
         "menu",
         "list",
@@ -155,37 +157,6 @@ def resolve_child_pids(alert: Alert) -> list[int]:
     return []
 
 
-def format_detail(alert: Alert) -> str:
-    lines = [
-        f"id:       {alert.id}",
-        f"ts:       {alert.ts}",
-        f"rule:     {alert.rule}",
-        f"severity: {alert.severity}",
-        f"status:   {alert.status}",
-        f"summary:  {alert.summary}",
-        f"exe:      {alert.exe}",
-        f"basename: {alert.basename}",
-        f"cmdline:  {' '.join(alert.cmdline)}",
-        f"cwd:      {alert.cwd}",
-        f"pids:     {', '.join(str(p) for p in alert.pids)}",
-    ]
-    if alert.parent:
-        lines.append(f"parent:   {alert.parent}")
-    if alert.paths:
-        lines.append("paths:")
-        for path in alert.paths:
-            lines.append(f"  {path}")
-    if alert.hashes:
-        lines.append("hashes:")
-        for path, digest in alert.hashes.items():
-            lines.append(f"  {path}: {digest}")
-    if alert.writer_pid is not None:
-        lines.append(f"writer_pid: {alert.writer_pid}")
-    if alert.evidence:
-        lines.append(f"evidence: {alert.evidence}")
-    return "\n".join(lines) + "\n"
-
-
 def confirm_kill(*, yes: bool, session: bool, precious: bool) -> bool:
     # --yes is only enough for child kill. Supervisor kill in a precious
     # worktree always needs an interactive tty (spec §11 / Task 13 prelude).
@@ -242,7 +213,7 @@ def cmd_investigate(alert_id: str) -> int:
     except KeyError:
         print(f"unknown alert: {alert_id}", file=sys.stderr)
         return 1
-    print(format_detail(alert), end="")
+    page_detail(alert)
     update_alert_status(alert.id, "investigated")
     return 0
 
@@ -368,7 +339,7 @@ def action_main(argv: list[str] | None = None) -> int:
         help="Skip confirm; child kill only (precious session still needs a tty)",
     )
 
-    inv_p = sub.add_parser("investigate", help="Print local alert detail")
+    inv_p = sub.add_parser("investigate", help="Local alert detail via $PAGER or less")
     inv_p.add_argument("alert_id")
 
     dis_p = sub.add_parser("dismiss", help="Close without allowlisting")
@@ -397,6 +368,8 @@ def action_main(argv: list[str] | None = None) -> int:
         return cmd_kill(args.alert_id, session=args.session, yes=args.yes)
     if args.command == "investigate":
         return cmd_investigate(args.alert_id)
+    if args.command == "summarize":
+        return cmd_summarize(args.alert_id)
     if args.command == "dismiss":
         return cmd_dismiss(args.alert_id)
     if args.command == "menu":
