@@ -1,8 +1,15 @@
 import signal
+from pathlib import Path
 
 import pytest
 
-from sentinel.kill import execute_kill, plan_kill
+from sentinel.kill import (
+    confirm_kill,
+    cwd_is_precious,
+    execute_kill,
+    plan_kill,
+    session_kill_requires_confirm,
+)
 
 
 def test_kill_refuses_foreign_uid(monkeypatch):
@@ -125,3 +132,75 @@ def test_execute_kill_exited_pid_is_success():
         alive=lambda pid: False,
     )
     assert result == [99]
+
+
+def test_plan_kill_default_mode_is_child():
+    plan = plan_kill(
+        alert_pids=[100, 101],
+        child_pids=[101],
+        get_uid=lambda pid: None,
+    )
+    assert plan == [101]
+
+
+def test_cwd_is_precious_matches_prefix_and_nested():
+    prefixes = ["/home/tav/Work/prod"]
+    assert cwd_is_precious("/home/tav/Work/prod", prefixes)
+    assert cwd_is_precious("/home/tav/Work/prod/src", prefixes)
+    assert not cwd_is_precious("/home/tav/Work/scratch", prefixes)
+    assert not cwd_is_precious("/home/tav/Work/prod2", prefixes)
+    assert not cwd_is_precious("/home/tav/Work/prod", [])
+    assert not cwd_is_precious("", prefixes)
+
+
+def test_session_kill_requires_confirm_on_precious_prefix():
+    prefixes = ["/home/tav/Work/prod"]
+    assert session_kill_requires_confirm("/home/tav/Work/prod/app", prefixes)
+    assert not session_kill_requires_confirm("/home/tav/Work/scratch", prefixes)
+    assert not session_kill_requires_confirm("/home/tav/Work/prod", [])
+
+
+def test_confirm_kill_session_precious_needs_typed_phrase():
+    assert (
+        confirm_kill(
+            yes=True,
+            session=True,
+            precious=True,
+            isatty=False,
+        )
+        is False
+    )
+    assert (
+        confirm_kill(
+            yes=True,
+            session=True,
+            precious=True,
+            isatty=True,
+            prompt=lambda _: "kill session",
+        )
+        is True
+    )
+    assert (
+        confirm_kill(
+            yes=True,
+            session=True,
+            precious=True,
+            isatty=True,
+            prompt=lambda _: "no",
+        )
+        is False
+    )
+
+
+def test_confirm_kill_yes_enough_for_child_or_non_precious_session():
+    assert confirm_kill(yes=True, session=False, precious=True) is True
+    assert confirm_kill(yes=True, session=True, precious=False) is True
+
+
+def test_config_template_precious_worktrees_empty():
+    import tomllib
+
+    root = Path(__file__).resolve().parents[1]
+    data = tomllib.loads((root / "packaging" / "config.toml").read_text(encoding="utf-8"))
+    section = data.get("kill", data)
+    assert section.get("precious_worktrees") == []

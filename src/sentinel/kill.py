@@ -3,10 +3,14 @@ from __future__ import annotations
 import errno
 import os
 import signal
+import sys
 import time
 from collections.abc import Callable, Sequence
+from pathlib import Path
 
 TERM_WAIT_SEC = 3.0
+DEFAULT_PRECIOUS_WORKTREES: tuple[str, ...] = ()
+SESSION_CONFIRM_PHRASE = "kill session"
 
 
 def pid_uid(pid: int) -> int | None:
@@ -31,6 +35,70 @@ def pid_alive(pid: int) -> bool:
             return False
         raise
     return True
+
+
+def cwd_is_precious(cwd: str, prefixes: Sequence[str]) -> bool:
+    """True when cwd equals or is nested under a precious worktree prefix."""
+    if not cwd:
+        return False
+    cwd_path = Path(cwd)
+    for prefix in prefixes:
+        if not prefix:
+            continue
+        prefix_path = Path(prefix)
+        if cwd_path == prefix_path:
+            return True
+        try:
+            cwd_path.relative_to(prefix_path)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def session_kill_requires_confirm(
+    cwd: str,
+    prefixes: Sequence[str] | None = None,
+) -> bool:
+    """Supervisor kill needs a second confirm when cwd matches a precious prefix."""
+    roots = DEFAULT_PRECIOUS_WORKTREES if prefixes is None else prefixes
+    return cwd_is_precious(cwd, roots)
+
+
+def confirm_kill(
+    *,
+    yes: bool,
+    session: bool,
+    precious: bool,
+    isatty: bool | None = None,
+    prompt: Callable[[str], str] | None = None,
+    warn: Callable[[str], None] | None = None,
+) -> bool:
+    """Gate kill. --yes is enough for child; precious --session needs a tty phrase."""
+    tty = sys.stdin.isatty() if isatty is None else isatty
+    ask = input if prompt is None else prompt
+
+    def _warn(msg: str) -> None:
+        if warn is not None:
+            warn(msg)
+        else:
+            print(msg, file=sys.stderr)
+
+    if session and precious:
+        if not tty:
+            _warn("precious worktree: supervisor kill requires interactive confirm")
+            return False
+        answer = ask(
+            "Type 'kill session' to confirm supervisor kill in precious worktree: "
+        )
+        return answer.strip().lower() == SESSION_CONFIRM_PHRASE
+    if yes:
+        return True
+    if not tty:
+        _warn("refusing kill without --yes or a tty")
+        return False
+    answer = ask("Kill target PIDs? [y/N] ")
+    return answer.strip().lower() in {"y", "yes"}
 
 
 def plan_kill(

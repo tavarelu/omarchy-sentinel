@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+import re
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from sentinel.models import Alert
 
@@ -35,6 +38,58 @@ DEFAULT_EDITOR_ALLOWLIST: frozenset[str] = frozenset(
         "sublime_text",
     }
 )
+
+DEFAULT_AGENT_BASENAMES: frozenset[str] = frozenset(
+    {
+        "claude",
+        "codex",
+        "cursor",
+        "cursor-agent",
+        "grok",
+    }
+)
+
+SHELL_BASENAMES: frozenset[str] = frozenset(
+    {"bash", "sh", "dash", "zsh", "fish", "ksh"}
+)
+
+NET_HELPER_BASENAMES: frozenset[str] = frozenset(
+    {"curl", "wget", "nc", "ncat", "netcat", "socat"}
+)
+
+# curl|bash / wget|sh (and sudo variants) inside a shell -c string or argv blob.
+_PIPE_TO_SHELL_RE = re.compile(
+    r"(?:curl|wget)\b[^;\n]*\|\s*(?:sudo\s+)?(?:bash|sh|dash|zsh|fish|ksh)\b",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class ProcSnapshot:
+    """One synthetic /proc row for R-CHILD-SHELL tree evaluation."""
+
+    pid: int
+    ppid: int
+    cmdline: tuple[str, ...]
+    exe: str = ""
+    cwd: str = ""
+    comm: str = ""
+
+    def __init__(
+        self,
+        pid: int,
+        ppid: int,
+        cmdline: Sequence[str] | None = None,
+        exe: str = "",
+        cwd: str = "",
+        comm: str = "",
+    ) -> None:
+        object.__setattr__(self, "pid", int(pid))
+        object.__setattr__(self, "ppid", int(ppid))
+        object.__setattr__(self, "cmdline", tuple(cmdline or ()))
+        object.__setattr__(self, "exe", exe or "")
+        object.__setattr__(self, "cwd", cwd or "")
+        object.__setattr__(self, "comm", comm or "")
 
 
 def _basename(exe: str | None) -> str:
@@ -187,3 +242,162 @@ def evaluate_write(
         )
 
     return None
+
+
+def _as_proc(item: ProcSnapshot | Mapping[str, Any]) -> ProcSnapshot:
+    if isinstance(item, ProcSnapshot):
+        return item
+    return ProcSnapshot(
+        pid=int(item["pid"]),
+        ppid=int(item["ppid"]),
+        cmdline=list(item.get("cmdline") or []),
+        exe=str(item.get("exe") or ""),
+        cwd=str(item.get("cwd") or ""),
+        comm=str(item.get("comm") or ""),
+    )
+
+
+def _proc_basename(proc: ProcSnapshot) -> str:
+    return (
+        _basename(proc.exe)
+        or _basename(proc.comm)
+        or _basename(proc.cmdline[0] if proc.cmdline else "")
+    )
+
+
+def _is_agent(proc: ProcSnapshot, agent_basenames: frozenset[str] | set[str]) -> bool:
+    return _proc_basename(proc) in agent_basenames
+
+
+def _is_shell(proc: ProcSnapshot) -> bool:
+    return _proc_basename(proc) in SHELL_BASENAMES
+
+
+def _is_net_helper(proc: ProcSnapshot) -> bool:
+    return _proc_basename(proc) in NET_HELPER_BASENAMES
+
+
+def _shell_c_argument(cmdline: Sequence[str]) -> str | None:
+    """Return the command string after -c / clustered -c flags, if any."""
+    args = list(cmdline[1:])
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok in ("-c", "--command"):
+            return args[i + 1] if i + 1 < len(args) else ""
+        if tok.startswith("-") and not tok.startswith("--"):
+            if "c" in tok[1:]:
+                return args[i + 1] if i + 1 < len(args) else ""
+        i += 1
+    return None
+
+
+def _is_pipe_to_shell(proc: ProcSnapshot) -> bool:
+    if not _is_shell(proc):
+        return False
+    command = _shell_c_argument(proc.cmdline)
+    blob = command if command is not None else " ".join(proc.cmdline)
+    return _PIPE_TO_SHELL_RE.search(blob) is not None
+
+
+def _is_interactive_shell(proc: ProcSnapshot) -> bool:
+    if not _is_shell(proc):
+        return False
+    if _shell_c_argument(proc.cmdline) is not None:
+        return False
+    args = list(proc.cmdline[1:])
+    for tok in args:
+        if tok in ("-i", "--interactive"):
+            return True
+        if tok.startswith("-") and not tok.startswith("--") and "i" in tok[1:]:
+            return True
+        if tok.startswith("-"):
+            continue
+        # Non-option arg is a script path, not an interactive shell.
+        return False
+    return True
+
+
+def _child_kind(proc: ProcSnapshot) -> str | None:
+    if _is_pipe_to_shell(proc):
+        return "curl|bash"
+    if _is_interactive_shell(proc):
+        return "interactive-shell"
+    if _is_net_helper(proc):
+        return "net-helper"
+    return None
+
+
+def _agent_ancestor(
+    proc: ProcSnapshot,
+    by_pid: dict[int, ProcSnapshot],
+    agent_basenames: frozenset[str] | set[str],
+) -> ProcSnapshot | None:
+    seen: set[int] = set()
+    current = by_pid.get(proc.ppid)
+    while current is not None and current.pid not in seen:
+        seen.add(current.pid)
+        if _is_agent(current, agent_basenames):
+            return current
+        current = by_pid.get(current.ppid)
+    return None
+
+
+def evaluate_child_shell(
+    procs: Sequence[ProcSnapshot | Mapping[str, Any]],
+    *,
+    agent_basenames: Iterable[str] | None = None,
+) -> list[Alert]:
+    """Alert when an agent parent spawns a surprise shell or net helper."""
+    snapshots = [_as_proc(p) for p in procs]
+    agents = (
+        frozenset(DEFAULT_AGENT_BASENAMES)
+        if agent_basenames is None
+        else frozenset(agent_basenames)
+    )
+    by_pid = {p.pid: p for p in snapshots}
+    alerts: list[Alert] = []
+    seen_children: set[int] = set()
+    for proc in snapshots:
+        if proc.pid in seen_children:
+            continue
+        if _is_agent(proc, agents):
+            continue
+        kind = _child_kind(proc)
+        if kind is None:
+            continue
+        parent = _agent_ancestor(proc, by_pid, agents)
+        if parent is None:
+            continue
+        seen_children.add(proc.pid)
+        child_base = _proc_basename(proc)
+        parent_base = _proc_basename(parent)
+        if kind == "curl|bash":
+            summary = f"{parent_base} spawned curl|bash ({child_base})"
+        elif kind == "interactive-shell":
+            summary = f"{parent_base} spawned interactive {child_base}"
+        else:
+            summary = f"{parent_base} spawned net helper {child_base}"
+        alerts.append(
+            Alert.new(
+                rule="R-CHILD-SHELL",
+                severity="high",
+                summary=summary,
+                pids=[parent.pid, proc.pid],
+                exe=proc.exe or (proc.cmdline[0] if proc.cmdline else ""),
+                basename=child_base,
+                cmdline=list(proc.cmdline),
+                cwd=proc.cwd,
+                parent={
+                    "pid": parent.pid,
+                    "exe": parent.exe or (parent.cmdline[0] if parent.cmdline else ""),
+                    "basename": parent_base,
+                },
+                evidence={
+                    "kind": kind,
+                    "child_pids": [proc.pid],
+                    "parent_pid": parent.pid,
+                },
+            )
+        )
+    return alerts

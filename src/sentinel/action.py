@@ -9,7 +9,12 @@ from pathlib import Path
 
 from sentinel.allowlist import SCOPES, approve, fingerprint
 from sentinel.investigate import page_detail
-from sentinel.kill import execute_kill, plan_kill
+from sentinel.kill import (
+    confirm_kill as kill_confirm,
+    cwd_is_precious as cwd_matches_precious,
+    execute_kill,
+    plan_kill,
+)
 from sentinel.models import Alert
 from sentinel.paths import default_config_path, state_dir
 from sentinel.rules import extract_bypass_flags
@@ -113,20 +118,8 @@ def load_precious_worktrees() -> list[str]:
 
 
 def cwd_is_precious(cwd: str, prefixes: list[str] | None = None) -> bool:
-    if not cwd:
-        return False
     roots = load_precious_worktrees() if prefixes is None else prefixes
-    cwd_path = Path(cwd)
-    for prefix in roots:
-        prefix_path = Path(prefix)
-        if cwd_path == prefix_path:
-            return True
-        try:
-            cwd_path.relative_to(prefix_path)
-            return True
-        except ValueError:
-            continue
-    return False
+    return cwd_matches_precious(cwd, roots)
 
 
 def get_alert(alert_id: str) -> Alert:
@@ -159,25 +152,8 @@ def resolve_child_pids(alert: Alert) -> list[int]:
 
 def confirm_kill(*, yes: bool, session: bool, precious: bool) -> bool:
     # --yes is only enough for child kill. Supervisor kill in a precious
-    # worktree always needs an interactive tty (spec §11 / Task 13 prelude).
-    if session and precious:
-        if not sys.stdin.isatty():
-            print(
-                "precious worktree: supervisor kill requires interactive confirm",
-                file=sys.stderr,
-            )
-            return False
-        answer = input(
-            "Type 'kill session' to confirm supervisor kill in precious worktree: "
-        )
-        return answer.strip().lower() == "kill session"
-    if yes:
-        return True
-    if not sys.stdin.isatty():
-        print("refusing kill without --yes or a tty", file=sys.stderr)
-        return False
-    answer = input("Kill target PIDs? [y/N] ")
-    return answer.strip().lower() in {"y", "yes"}
+    # worktree always needs an interactive tty (spec §11 / Task 13).
+    return kill_confirm(yes=yes, session=session, precious=precious)
 
 
 def cmd_approve(alert_id: str, scope: str) -> int:

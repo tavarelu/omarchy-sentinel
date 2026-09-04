@@ -1,0 +1,6 @@
+# Default Sentinel config. Copy to ~/.config/sentinel/config.toml
+# Precious worktrees require a second confirm for `sentinel-action kill --session`.
+# Starts empty; fill with cwd prefixes the user considers non-throwaway.
+
+[kill]
+precious_worktrees = []
