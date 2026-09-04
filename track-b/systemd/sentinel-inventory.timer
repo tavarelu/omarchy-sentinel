@@ -1,0 +1,12 @@
+# Daily off-peak inventory. Persistent=true catches up after missed boots.
+
+[Unit]
+Description=Daily off-peak Omarchy Sentinel inventory
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+Unit=sentinel-inventory.service
+
+[Install]
+WantedBy=timers.target

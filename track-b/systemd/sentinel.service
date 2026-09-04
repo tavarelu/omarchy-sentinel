@@ -1,0 +1,20 @@
+# User unit: Omarchy Sentinel daemon (inotify + process sampler).
+# Paths assume the clone lives at ~/Work/sentinel with a local .venv.
+# If the repo moves, override ExecStart:
+#   systemctl --user edit sentinel.service
+# Do not enable --now until Phase 2 acceptance smoke passes; then:
+#   systemctl --user enable --now sentinel.service
+
+[Unit]
+Description=Omarchy Sentinel daemon
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/Work/sentinel/.venv/bin/sentinel daemon
+Restart=on-failure
+RestartSec=5
+MemoryMax=256M
+
+[Install]
+WantedBy=default.target

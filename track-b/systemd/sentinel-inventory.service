@@ -1,0 +1,13 @@
+# User oneshot: daily scout + watchlist refresh (driven by sentinel-inventory.timer).
+# Paths assume the clone lives at ~/Work/sentinel with a local .venv.
+# If the repo moves, override ExecStart:
+#   systemctl --user edit sentinel-inventory.service
+
+[Unit]
+Description=Omarchy Sentinel inventory (scout + watchlist refresh)
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/Work/sentinel/.venv/bin/sentinel-scout --refresh
+MemoryMax=512M
