@@ -1,0 +1,2 @@
+description = "Implements one packet with TDD inside the current worktree; commits with the Packet trailer"
+prompt_file = ".grok/prompts/implementer.md"
