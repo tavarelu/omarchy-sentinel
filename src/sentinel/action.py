@@ -218,6 +218,23 @@ def cmd_investigate(alert_id: str) -> int:
     return 0
 
 
+def cmd_summarize(alert_id: str) -> int:
+    try:
+        alert = get_alert(alert_id)
+    except KeyError:
+        print(f"unknown alert: {alert_id}", file=sys.stderr)
+        return 1
+    from sentinel.investigate import format_detail
+    from sentinel.summarize import summarize
+
+    text = summarize(alert)
+    if text is None:
+        print(format_detail(alert), end="")
+    else:
+        print(text)
+    return 0
+
+
 def cmd_menu(alert_id: str) -> int:
     try:
         alert = get_alert(alert_id)
@@ -230,10 +247,12 @@ def cmd_menu(alert_id: str) -> int:
     print("  approve")
     print("  kill")
     print("  investigate")
+    print("  summarize")
     print("  dismiss")
     print(f"  sentinel-action {alert.id} approve --scope session|24h|this-repo|forever")
     print(f"  sentinel-action {alert.id} kill [--session] [--yes]")
     print(f"  sentinel-action {alert.id} investigate")
+    print(f"  sentinel-action {alert.id} summarize")
     print(f"  sentinel-action {alert.id} dismiss")
     return 0
 
@@ -341,6 +360,12 @@ def action_main(argv: list[str] | None = None) -> int:
 
     inv_p = sub.add_parser("investigate", help="Local alert detail via $PAGER or less")
     inv_p.add_argument("alert_id")
+
+    sum_p = sub.add_parser(
+        "summarize",
+        help="Opt-in redacted cloud digest (falls back to local detail)",
+    )
+    sum_p.add_argument("alert_id")
 
     dis_p = sub.add_parser("dismiss", help="Close without allowlisting")
     dis_p.add_argument("alert_id")
