@@ -1,0 +1,15 @@
+# OnFailure helper for sentinel.service start-limit (daemon flap).
+# Not enabled / not WantedBy=default.target — systemd starts it from OnFailure=.
+# Does not stop or conflict with Track A sentinel-health units.
+# Do not `systemctl --user enable --now sentinel.service` from this unit.
+
+[Unit]
+Description=Notify that Omarchy Sentinel daemon is unstable
+After=sentinel.service
+RefuseManualStart=no
+
+[Service]
+Type=oneshot
+# Restart=on-failure also passes through failed; toast only the flap.
+ExecCondition=/bin/sh -c 'test "$(systemctl --user show -p Result --value sentinel.service)" = start-limit-hit'
+ExecStart=/usr/bin/omarchy notification send -u critical --app-name Sentinel "Sentinel unstable" "Daemon restart limit hit; Track A health hooks still running"

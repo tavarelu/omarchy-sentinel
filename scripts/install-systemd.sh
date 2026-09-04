@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Install Track B systemd --user units for Sentinel.
 # Copies units to ~/.config/systemd/user/, reloads, enables the inventory timer.
+# Copies sentinel-unstable.service (OnFailure helper) but does not enable it.
 # Does NOT enable sentinel.service — do that only after Phase 2 acceptance smoke:
 #   systemctl --user enable --now sentinel.service
 #
@@ -17,6 +18,7 @@ UNIT_DST="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
 UNITS=(
   sentinel.service
+  sentinel-unstable.service
   sentinel-inventory.service
   sentinel-inventory.timer
 )

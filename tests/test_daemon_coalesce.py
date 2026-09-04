@@ -79,6 +79,36 @@ def test_handle_write_skips_operational_state_files(tmp_path, monkeypatch):
     assert list(iter_alerts()) == []
 
 
+def test_emit_appends_when_paused_without_calling_runner(tmp_path, monkeypatch):
+    from datetime import timedelta
+
+    from sentinel.action import write_pause
+    from sentinel.notify import send_alert
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    write_pause(timedelta(hours=1))
+    calls = []
+    monkeypatch.setattr("sentinel.notify.run", lambda argv: calls.append(argv))
+    d = _daemon(tmp_path, monkeypatch, notify=send_alert)
+    alert = Alert.new(
+        rule="R-BYPASS",
+        severity="high",
+        summary="claude started with --yolo",
+        pids=[1],
+        exe="/usr/bin/claude",
+        basename="claude",
+        cmdline=["claude", "--yolo"],
+        cwd="/tmp/scratch",
+        evidence={"flag": "--yolo", "flags": ["--yolo"]},
+    )
+    d.emit(alert)
+    rows = list(iter_alerts())
+    assert len(rows) == 1
+    assert rows[0].id == alert.id
+    assert calls == []
+
+
 def test_emit_respects_allowlist_and_coalesce(tmp_path, monkeypatch):
     d = _daemon(tmp_path, monkeypatch)
     alert = Alert.new(

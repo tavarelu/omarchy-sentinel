@@ -8,6 +8,11 @@
 [Unit]
 Description=Omarchy Sentinel daemon
 After=default.target
+# Flap: 5 starts in 60s → failed (start-limit-hit) and OnFailure toast.
+# Track A health hooks are separate units and stay up.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+OnFailure=sentinel-unstable.service
 
 [Service]
 Type=simple

@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from sentinel.action import is_paused
 from sentinel.models import Alert
 
 _URGENCY = {
@@ -56,4 +57,6 @@ def build_argv(alert: Alert) -> list[str]:
 
 
 def send_alert(alert: Alert) -> None:
+    if is_paused():
+        return
     run(build_argv(alert))

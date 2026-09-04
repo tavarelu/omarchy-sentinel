@@ -1,7 +1,17 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
+import pytest
+
 from sentinel.models import Alert
 from sentinel.notify import send_alert
+
+
+@pytest.fixture(autouse=True)
+def _isolate_state(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
 
 
 def _alert(**overrides) -> Alert:
@@ -61,3 +71,13 @@ def test_notify_unknown_severity_defaults_normal(monkeypatch):
     assert calls[0][calls[0].index("-u") + 1] == "normal"
     # why falls back to rule when evidence has no flag/path/event
     assert "claude — R-BYPASS (scratch)" in calls[0]
+
+
+def test_notify_paused_does_not_call_runner(monkeypatch):
+    from sentinel.action import write_pause
+
+    write_pause(timedelta(hours=1))
+    calls = []
+    monkeypatch.setattr("sentinel.notify.run", lambda argv: calls.append(argv))
+    send_alert(_alert())
+    assert calls == []
