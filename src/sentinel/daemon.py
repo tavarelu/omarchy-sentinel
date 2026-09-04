@@ -36,12 +36,22 @@ DEFAULT_AGENT_BASENAMES: frozenset[str] = frozenset(
 )
 
 WATCH_KINDS = frozenset({"hooks", "settings", "mcp", "auth"})
-OPERATIONAL_NAMES = frozenset({"alerts.jsonl", "launches.jsonl", "health.json"})
+OPERATIONAL_NAMES = frozenset(
+    {
+        "alerts.jsonl",
+        "launches.jsonl",
+        "health.json",
+        "allowlist.json",
+        "watchlist.json",
+    }
+)
+_DELETED_SUFFIX = " (deleted)"
 
 # inotify_init1 flags share values with open(2).
 IN_CLOEXEC = int(getattr(os, "O_CLOEXEC", 0x80000))
 IN_NONBLOCK = int(getattr(os, "O_NONBLOCK", 0x800))
 IN_CLOSE_WRITE = 0x00000008
+IN_MOVED_FROM = 0x00000040
 IN_MOVED_TO = 0x00000080
 IN_CREATE = 0x00000100
 IN_DELETE = 0x00000200
@@ -53,6 +63,7 @@ IN_ISDIR = 0x40000000
 
 WATCH_MASK = (
     IN_CLOSE_WRITE
+    | IN_MOVED_FROM
     | IN_MOVED_TO
     | IN_CREATE
     | IN_DELETE
@@ -265,9 +276,42 @@ def _is_alert_allowed(alert: Alert) -> bool:
     return False
 
 
+def _exe_basename(exe: str) -> str:
+    name = Path(exe).name
+    if name.endswith(_DELETED_SUFFIX):
+        return name[: -len(_DELETED_SUFFIX)]
+    return name
+
+
+def process_name_candidates(
+    exe: str,
+    cmdline: Sequence[str],
+    comm: str = "",
+) -> set[str]:
+    """exe basename (minus ' (deleted)'), cmdline token basenames, and comm."""
+    names: set[str] = set()
+    stripped = comm.strip()
+    if stripped:
+        names.add(stripped)
+    if exe:
+        names.add(_exe_basename(exe))
+    for tok in cmdline:
+        base = Path(tok).name
+        if base:
+            names.add(base)
+    return names
+
+
 def _readlink(path: Path) -> str:
     try:
         return os.readlink(path)
+    except OSError:
+        return ""
+
+
+def _read_comm(pid_dir: Path) -> str:
+    try:
+        return (pid_dir / "comm").read_text(encoding="utf-8").strip()
     except OSError:
         return ""
 
@@ -293,8 +337,8 @@ class Daemon:
             cfg.get("sampler_interval", DEFAULT_SAMPLER_INTERVAL)
         )
         window = float(cfg.get("coalesce_window", DEFAULT_COALESCE_WINDOW))
-        clock = cfg.get("clock", time.monotonic)
-        self.coalescer = Coalescer(window_sec=window, clock=clock)
+        self._clock = cfg.get("clock", time.monotonic)
+        self.coalescer = Coalescer(window_sec=window, clock=self._clock)
         self._extra_flags = list(cfg.get("extra_bypass_flags") or [])
         known = cfg.get("known_basenames")
         self._known = (
@@ -305,6 +349,7 @@ class Daemon:
         self._proc_root = Path(cfg.get("proc_root", "/proc"))
         self._home = Path(cfg.get("home", Path.home()))
         self._enable_inotify = bool(cfg.get("inotify", True))
+        self._last_sample: float | None = None
         self._watch_override = (
             [Path(p) for p in cfg["watch_paths"]] if "watch_paths" in cfg else None
         )
@@ -414,8 +459,6 @@ class Daemon:
         path = Path(path)
         if path.name in OPERATIONAL_NAMES:
             return
-        if path.name == WATCHLIST_FILENAME and self._self_refresh:
-            return
         alert = evaluate_write(
             path,
             writer_pid,
@@ -473,6 +516,30 @@ class Daemon:
         finally:
             self._self_refresh = False
 
+    def handle_watch_lost(self, path: Path | None = None) -> None:
+        loc = str(path) if path is not None else ""
+        alert = Alert.new(
+            rule="R-SELF",
+            severity="medium",
+            summary="watched path moved or deleted; refreshing watchlist",
+            pids=[],
+            exe="",
+            basename="inotify",
+            cmdline=[],
+            cwd=loc,
+            evidence={"event": "IN_MOVE_SELF", "path": loc},
+        )
+        self.emit(alert)
+        self._self_refresh = True
+        try:
+            if self._watch_override is None:
+                refresh_watchlist(self._home)
+                self._load_watch_paths()
+            if self._enable_inotify:
+                self._rebuild_watches()
+        finally:
+            self._self_refresh = False
+
     def consume_launches(self) -> None:
         path = launches_path()
         if not path.exists():
@@ -524,15 +591,34 @@ class Daemon:
             if not cmdline:
                 continue
             exe = _readlink(pid_dir / "exe")
-            basename = Path(exe).name if exe else Path(cmdline[0]).name
-            if self._known and basename not in self._known:
-                continue
+            comm = _read_comm(pid_dir)
+            if self._known:
+                names = process_name_candidates(exe, cmdline, comm)
+                if names.isdisjoint(self._known):
+                    continue
             cwd = _readlink(pid_dir / "cwd")
             self.handle_process(cmdline, exe or cmdline[0], cwd, pid=pid)
 
-    def tick(self) -> None:
+    def maybe_sample(self) -> bool:
+        now = self._clock()
+        if (
+            self._last_sample is not None
+            and (now - self._last_sample) < self.sampler_interval
+        ):
+            return False
         self.consume_launches()
         self.sample_proc()
+        self._last_sample = now
+        return True
+
+    def _sample_timeout(self) -> float:
+        if self._last_sample is None:
+            return 0.0
+        remaining = self.sampler_interval - (self._clock() - self._last_sample)
+        return max(0.0, remaining)
+
+    def tick(self) -> None:
+        self.maybe_sample()
 
     def _on_fs_event(self, path: Path, mask: int) -> None:
         if path.name == LAUNCHES_FILENAME:
@@ -546,6 +632,8 @@ class Daemon:
         if self._inotify is None:
             return
         overflow = False
+        lost: Path | None = None
+        lost_any = False
         for event in self._inotify.read_events():
             if event.mask & IN_Q_OVERFLOW:
                 overflow = True
@@ -559,12 +647,19 @@ class Daemon:
                     self._inotify.add_watch(path)
                 except OSError:
                     pass
-            if event.mask & (IN_DELETE_SELF | IN_MOVE_SELF | IN_IGNORED):
+            if event.mask & (IN_DELETE_SELF | IN_MOVE_SELF):
+                self._inotify.wd_to_path.pop(event.wd, None)
+                lost = path
+                lost_any = True
+                continue
+            if event.mask & IN_IGNORED:
                 self._inotify.wd_to_path.pop(event.wd, None)
                 continue
             self._on_fs_event(path, event.mask)
         if overflow:
             self.handle_overflow()
+        elif lost_any:
+            self.handle_watch_lost(lost)
 
     def run(self) -> None:
         if not self._stopped():
@@ -572,7 +667,7 @@ class Daemon:
             self._rebuild_watches()
         try:
             while not self._stopped():
-                timeout = self.sampler_interval
+                timeout = self._sample_timeout()
                 ino = self._inotify
                 if ino is not None and ino.fd >= 0:
                     ready, _, _ = select.select([ino.fd], [], [], timeout)
@@ -586,7 +681,7 @@ class Daemon:
                     time.sleep(timeout)
                 if self._stopped():
                     break
-                self.tick()
+                self.maybe_sample()
         finally:
             self._close_inotify()
 

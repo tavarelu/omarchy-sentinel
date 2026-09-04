@@ -71,10 +71,11 @@ def test_handle_write_self_path_is_rself(tmp_path, monkeypatch):
 def test_handle_write_skips_operational_state_files(tmp_path, monkeypatch):
     state = tmp_path / "state" / "sentinel"
     state.mkdir(parents=True)
-    alerts = state / "alerts.jsonl"
-    alerts.write_text("")
     d = _daemon(tmp_path, monkeypatch, self_paths=[state], watch_paths=[])
-    d.handle_write(alerts, writer_pid=1, writer_exe="/usr/bin/python3")
+    for name in ("alerts.jsonl", "launches.jsonl", "allowlist.json", "watchlist.json"):
+        path = state / name
+        path.write_text("")
+        d.handle_write(path, writer_pid=1, writer_exe="/usr/bin/python3")
     assert list(iter_alerts()) == []
 
 
@@ -144,13 +145,22 @@ def test_overflow_emits_warning_and_refreshes(tmp_path, monkeypatch):
     assert called == ["refresh", "refresh"]
 
 
-def _fake_proc(root: Path, pid: int, exe_name: str, cmdline: list[str], cwd: Path) -> None:
+def _fake_proc(
+    root: Path,
+    pid: int,
+    exe_name: str,
+    cmdline: list[str],
+    cwd: Path,
+    *,
+    comm: str | None = None,
+    exe_target: str | None = None,
+) -> None:
     p = root / str(pid)
     p.mkdir(parents=True)
     cwd.mkdir(parents=True, exist_ok=True)
     (p / "cmdline").write_bytes(b"\0".join(s.encode() for s in cmdline) + b"\0")
-    (p / "comm").write_text(exe_name + "\n")
-    (p / "exe").symlink_to(f"/usr/bin/{exe_name}")
+    (p / "comm").write_text((comm if comm is not None else exe_name) + "\n")
+    (p / "exe").symlink_to(exe_target or f"/usr/bin/{exe_name}")
     (p / "cwd").symlink_to(cwd)
 
 
@@ -173,6 +183,78 @@ def test_sampler_detects_known_basename_bypass(tmp_path, monkeypatch):
     assert rows[0].basename == "claude"
     d.sample_proc()
     assert len(list(iter_alerts())) == 1
+
+
+def test_maybe_sample_skips_until_interval(tmp_path, monkeypatch):
+    now = [0.0]
+    d = _daemon(
+        tmp_path,
+        monkeypatch,
+        clock=lambda: now[0],
+        sampler_interval=2.0,
+    )
+    calls = {"n": 0}
+    d.sample_proc = lambda: calls.__setitem__("n", calls["n"] + 1)
+    assert d.maybe_sample() is True
+    assert calls["n"] == 1
+    now[0] = 1.9
+    assert d.maybe_sample() is False
+    assert calls["n"] == 1
+    now[0] = 2.0
+    assert d.maybe_sample() is True
+    assert calls["n"] == 2
+
+
+def test_sampler_matches_comm_deleted_exe_and_node_wrapper(tmp_path, monkeypatch):
+    proc = tmp_path / "proc"
+    cwd = tmp_path / "proj"
+    _fake_proc(
+        proc,
+        11,
+        "node",
+        ["node", "/usr/lib/node_modules/.bin/claude", "--yolo"],
+        cwd,
+        comm="node",
+        exe_target="/usr/bin/node",
+    )
+    _fake_proc(
+        proc,
+        12,
+        "python3",
+        ["python3", "--yolo"],
+        cwd,
+        comm="claude",
+        exe_target="/usr/bin/python3",
+    )
+    _fake_proc(
+        proc,
+        13,
+        "claude",
+        ["claude", "--trust-all"],
+        cwd,
+        comm="claude",
+        exe_target="/usr/bin/claude (deleted)",
+    )
+    _fake_proc(
+        proc,
+        14,
+        "node",
+        ["node", "server.js"],
+        cwd,
+        comm="node",
+        exe_target="/usr/bin/node",
+    )
+    d = _daemon(
+        tmp_path,
+        monkeypatch,
+        proc_root=proc,
+        known_basenames=["claude"],
+    )
+    d.sample_proc()
+    rows = list(iter_alerts())
+    pids = {p for row in rows for p in row.pids}
+    assert pids == {11, 12, 13}
+    assert all(row.rule == "R-BYPASS" for row in rows)
 
 
 def test_sampler_interval_clamped_2_to_5():
@@ -240,6 +322,47 @@ def test_cli_daemon_invokes_run_forever(monkeypatch):
     called.clear()
     assert main(["run"]) == 0
     assert "config" in called
+
+
+def test_watch_mask_includes_moved_from():
+    from sentinel.daemon import IN_DELETE_SELF, IN_MOVED_FROM, IN_MOVE_SELF, WATCH_MASK
+
+    assert WATCH_MASK & IN_MOVED_FROM
+    assert WATCH_MASK & IN_MOVE_SELF
+    assert WATCH_MASK & IN_DELETE_SELF
+
+
+def test_move_self_triggers_watch_lost(tmp_path, monkeypatch):
+    from sentinel.daemon import IN_MOVE_SELF, InotifyEvent
+
+    d = _daemon(tmp_path, monkeypatch)
+    called: list[str] = []
+    d.handle_watch_lost = lambda path=None: called.append("lost")
+
+    class FakeIno:
+        wd_to_path = {1: tmp_path / "hooks"}
+
+        def read_events(self):
+            return [InotifyEvent(wd=1, mask=IN_MOVE_SELF, cookie=0, name="")]
+
+    d._inotify = FakeIno()
+    d._drain_inotify()
+    assert called == ["lost"]
+
+
+def test_handle_watch_lost_refreshes(tmp_path, monkeypatch):
+    called: list[str] = []
+    d = _daemon(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "sentinel.daemon.refresh_watchlist",
+        lambda home=None: called.append("refresh") or tmp_path / "watchlist.json",
+    )
+    d.handle_watch_lost()
+    d.handle_watch_lost()
+    rows = list(iter_alerts())
+    assert len(rows) == 1
+    assert "moved" in rows[0].summary.lower() or "deleted" in rows[0].summary.lower()
+    assert called == ["refresh", "refresh"]
 
 
 def test_inotify_reports_close_write(tmp_path):
