@@ -27,20 +27,56 @@ def _alert(**overrides) -> Alert:
 
 
 def test_approve_writes_allowlist_and_status(monkeypatch, tmp_path):
-    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     clear_session()
-    alert = _alert()
+    root = tmp_path / "repo"
+    (root / ".git").mkdir(parents=True)
+    sub = root / "sub"
+    sub.mkdir()
+    alert = _alert(cwd=str(sub))
     append_alert(alert)
     assert action_main([alert.id, "approve", "--scope", "this-repo"]) == 0
     assert list(iter_alerts())[0].status == "approved"
+    # this-repo is keyed on the repository root, not the subdirectory the agent ran in.
     fp = fingerprint(
         alert.rule,
         alert.basename,
         frozenset(["--dangerously-skip-permissions"]),
-        alert.cwd,
+        str(root),
     )
-    assert is_allowed(fp, alert.cwd) is True
-    assert is_allowed(fp, "/home/tav/Work/prod") is False
+    assert is_allowed(fp, str(root)) is True
+    assert is_allowed(fp, str(root / "other")) is True
+    assert is_allowed(fp, str(tmp_path / "elsewhere")) is False
+
+
+def test_approve_write_alert_suppresses_daemon(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    clear_session()
+    from sentinel.daemon import _is_alert_allowed
+    from sentinel.rules import evaluate_write
+
+    target = tmp_path / "settings.json"
+    target.write_text("{}")
+    first = evaluate_write(target, None, None, self_paths=[], watch_paths=[target])
+    assert first is not None and first.rule == "R-HOOK-WRITE"
+    append_alert(first)
+    assert action_main([first.id, "approve", "--scope", "forever"]) == 0
+    again = evaluate_write(target, None, None, self_paths=[], watch_paths=[target])
+    assert _is_alert_allowed(again) is True
+
+
+def test_approve_forever_is_global(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    clear_session()
+    from sentinel.daemon import _is_alert_allowed
+
+    alert = _alert(cwd="/a/b/c")
+    append_alert(alert)
+    assert action_main([alert.id, "approve", "--scope", "forever"]) == 0
+    for cwd in ("/a/b/c/d", "/a/b", "/x/y"):
+        assert _is_alert_allowed(_alert(cwd=cwd)) is True
 
 
 def test_approve_subcommand_first(monkeypatch, tmp_path):

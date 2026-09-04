@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sentinel.allowlist import SCOPES, approve, fingerprint
+from sentinel.keys import alert_flag_set, approval_prefix
 from sentinel.investigate import page_detail
 from sentinel.kill import (
     confirm_kill as kill_confirm,
@@ -17,7 +18,6 @@ from sentinel.kill import (
 )
 from sentinel.models import Alert
 from sentinel.paths import default_config_path, state_dir
-from sentinel.rules import extract_bypass_flags
 from sentinel.store import iter_alerts, update_alert_status
 
 PAUSE_FILENAME = "pause_until"
@@ -129,16 +129,6 @@ def get_alert(alert_id: str) -> Alert:
     raise KeyError(alert_id)
 
 
-def _flag_set(alert: Alert) -> frozenset[str]:
-    flags = alert.evidence.get("flags")
-    if isinstance(flags, list) and flags:
-        return frozenset(str(x) for x in flags)
-    flag = alert.evidence.get("flag")
-    if flag:
-        return frozenset({str(flag)})
-    return frozenset(extract_bypass_flags(alert.cmdline))
-
-
 def resolve_child_pids(alert: Alert) -> list[int]:
     ev = alert.evidence or {}
     if "child_pids" in ev:
@@ -165,10 +155,11 @@ def cmd_approve(alert_id: str, scope: str) -> int:
     if scope not in SCOPES:
         print(f"invalid scope: {scope}", file=sys.stderr)
         return 1
-    fp = fingerprint(alert.rule, alert.basename, _flag_set(alert), alert.cwd)
-    approve(fp, scope, alert.cwd)  # type: ignore[arg-type]
+    prefix = approval_prefix(alert, scope)
+    fp = fingerprint(alert.rule, alert.basename, alert_flag_set(alert), prefix)
+    approve(fp, scope, prefix)  # type: ignore[arg-type]
     update_alert_status(alert.id, "approved")
-    print(f"approved {alert.id} scope={scope}")
+    print(f"approved {alert.id} scope={scope} prefix={prefix or '(any)'}")
     return 0
 
 

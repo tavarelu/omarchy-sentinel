@@ -12,9 +12,9 @@ Scope = Literal["session", "24h", "this-repo", "forever"]
 SCOPES = frozenset({"session", "24h", "this-repo", "forever"})
 
 ALLOWLIST_FILENAME = "allowlist.json"
+SESSION_FILENAME = "allowlist-session.json"
 
-# Session-scoped approvals live in memory only (cleared on restart / clear_session).
-_session: dict[str, dict[str, Any]] = {}
+Decision = Literal["allowed", "expired", "none"]
 
 
 def fingerprint(
@@ -32,23 +32,47 @@ def _allowlist_path() -> Path:
     return state_dir() / ALLOWLIST_FILENAME
 
 
-def _load_persisted() -> dict[str, dict[str, Any]]:
-    path = _allowlist_path()
+def _session_path() -> Path:
+    # Session approvals must cross the process boundary between sentinel-action
+    # and the daemon, so they live in a file the daemon deletes on startup.
+    return state_dir() / SESSION_FILENAME
+
+
+def _load_file(path: Path) -> dict[str, dict[str, Any]]:
     if not path.exists():
         return {}
-    with path.open(encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with path.open(encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
     if isinstance(data, dict) and "entries" in data:
         entries = data["entries"]
         return entries if isinstance(entries, dict) else {}
     return data if isinstance(data, dict) else {}
 
 
-def _save_persisted(entries: dict[str, dict[str, Any]]) -> None:
-    path = _allowlist_path()
+def _save_file(path: Path, entries: dict[str, dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         json.dump({"entries": entries}, f, separators=(",", ":"))
+
+
+def _load_persisted() -> dict[str, dict[str, Any]]:
+    return _load_file(_allowlist_path())
+
+
+def _save_persisted(entries: dict[str, dict[str, Any]]) -> None:
+    _save_file(_allowlist_path(), entries)
+
+
+def _load_session() -> dict[str, dict[str, Any]]:
+    return _load_file(_session_path())
+
+
+def load_all() -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """(session entries, persisted entries) read once, for one decision."""
+    return _load_session(), _load_persisted()
 
 
 def _cwd_matches_prefix(cwd: str, prefix: str) -> bool:
@@ -63,20 +87,41 @@ def _cwd_matches_prefix(cwd: str, prefix: str) -> bool:
         return False
 
 
+def _entry_expired(entry: dict[str, Any], now: datetime) -> bool:
+    if entry.get("scope") != "24h":
+        return False
+    expires_at = entry.get("expires_at")
+    if expires_at is None:
+        return True
+    return now >= datetime.fromisoformat(expires_at)
+
+
 def _entry_allows(entry: dict[str, Any], cwd: str, now: datetime) -> bool:
-    scope = entry.get("scope")
-    if scope == "24h":
-        expires_at = entry.get("expires_at")
-        if expires_at is None:
-            return False
-        expiry = datetime.fromisoformat(expires_at)
-        if now >= expiry:
-            return False
-    if scope == "this-repo":
+    if _entry_expired(entry, now):
+        return False
+    if entry.get("scope") == "this-repo":
         prefix = entry.get("cwd_prefix", "")
         if not _cwd_matches_prefix(cwd, prefix):
             return False
     return True
+
+
+def decide(
+    session: dict[str, dict[str, Any]],
+    persisted: dict[str, dict[str, Any]],
+    fp: str,
+    cwd: str,
+    now: datetime,
+) -> Decision:
+    """allowed / expired / none for one fingerprint against already-loaded entries."""
+    entry = session.get(fp)
+    if entry is None:
+        entry = persisted.get(fp)
+    if entry is None:
+        return "none"
+    if _entry_expired(entry, now):
+        return "expired"
+    return "allowed" if _entry_allows(entry, cwd, now) else "none"
 
 
 def approve(fp: str, scope: Scope, cwd_prefix: str) -> None:
@@ -92,25 +137,43 @@ def approve(fp: str, scope: Scope, cwd_prefix: str) -> None:
             datetime.now(timezone.utc) + timedelta(hours=24)
         ).isoformat()
     if scope == "session":
-        _session[fp] = entry
+        session = _load_session()
+        session[fp] = entry
+        _save_file(_session_path(), session)
         return
     entries = _load_persisted()
     entries[fp] = entry
-    # Drop any stale session copy for the same fingerprint.
-    _session.pop(fp, None)
     _save_persisted(entries)
+    # Drop any stale session copy for the same fingerprint.
+    session = _load_session()
+    if fp in session:
+        del session[fp]
+        _save_file(_session_path(), session)
 
 
 def is_allowed(fp: str, cwd: str, now: datetime | None = None) -> bool:
     when = now if now is not None else datetime.now(timezone.utc)
-    if fp in _session:
-        return _entry_allows(_session[fp], cwd, when)
+    session, persisted = load_all()
+    return decide(session, persisted, fp, cwd, when) == "allowed"
+
+
+def remove(fp: str) -> None:
+    """Forget one fingerprint everywhere (used when a 24h approval expires)."""
     entries = _load_persisted()
-    entry = entries.get(fp)
-    if entry is None:
-        return False
-    return _entry_allows(entry, cwd, when)
+    if fp in entries:
+        del entries[fp]
+        _save_persisted(entries)
+    session = _load_session()
+    if fp in session:
+        del session[fp]
+        _save_file(_session_path(), session)
 
 
 def clear_session() -> None:
-    _session.clear()
+    """Session scope ends here: called by the daemon at startup."""
+    try:
+        _session_path().unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass

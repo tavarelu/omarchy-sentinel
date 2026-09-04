@@ -12,7 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from sentinel.allowlist import fingerprint, is_allowed
+from datetime import datetime, timezone
+
+from sentinel.allowlist import clear_session, decide, fingerprint, load_all, remove
+from sentinel.keys import alert_flag_set, alert_location, candidate_prefixes
 from sentinel.models import Alert
 from sentinel.paths import config_dir, default_config_path, state_dir
 from sentinel.rules import evaluate_process, evaluate_write
@@ -42,6 +45,7 @@ OPERATIONAL_NAMES = frozenset(
         "launches.jsonl",
         "health.json",
         "allowlist.json",
+        "allowlist-session.json",
         "watchlist.json",
     }
 )
@@ -250,30 +254,55 @@ def coalesce_key(alert: Alert) -> str:
     return f"{alert.rule}|{alert.basename}|{loc}"
 
 
-def _flag_set(alert: Alert) -> frozenset[str]:
-    flags = alert.evidence.get("flags")
-    if isinstance(flags, list):
-        return frozenset(str(x) for x in flags)
-    flag = alert.evidence.get("flag")
-    if flag:
-        return frozenset({str(flag)})
-    return frozenset()
+def _allow_decision(alert: Alert, now: datetime | None = None) -> tuple[str, str]:
+    """(allowed|expired|none, fingerprint) with the allowlist files read once.
 
-
-def _is_alert_allowed(alert: Alert) -> bool:
-    flags = _flag_set(alert)
-    cwd = alert.cwd or (alert.paths[0] if alert.paths else "")
-    if not cwd:
-        return is_allowed(
-            fingerprint(alert.rule, alert.basename, flags, ""),
-            "",
-        )
-    path = Path(cwd)
-    for prefix in (str(path), *(str(p) for p in path.parents)):
+    Tests the global prefix first, then the location and each parent, so an
+    approval keyed by sentinel-action (see keys.approval_prefix) always matches.
+    """
+    when = now if now is not None else datetime.now(timezone.utc)
+    flags = alert_flag_set(alert)
+    location = alert_location(alert)
+    session, persisted = load_all()
+    expired_fp: str | None = None
+    for prefix in candidate_prefixes(location):
         fp = fingerprint(alert.rule, alert.basename, flags, prefix)
-        if is_allowed(fp, cwd):
-            return True
-    return False
+        verdict = decide(session, persisted, fp, location, when)
+        if verdict == "allowed":
+            return "allowed", fp
+        if verdict == "expired" and expired_fp is None:
+            expired_fp = fp
+    if expired_fp is not None:
+        return "expired", expired_fp
+    return "none", ""
+
+
+def _is_alert_allowed(alert: Alert, now: datetime | None = None) -> bool:
+    return _allow_decision(alert, now)[0] == "allowed"
+
+
+def expired_alert(alert: Alert, fp: str) -> Alert:
+    """Spec section 8: an expired approval that recurs is R-ALLOW-EXPIRE (low), not a new panic."""
+    return Alert.new(
+        rule="R-ALLOW-EXPIRE",
+        severity="low",
+        summary=f"{alert.basename or alert.rule} approval expired; pattern recurred",
+        pids=list(alert.pids),
+        exe=alert.exe,
+        basename=alert.basename,
+        cmdline=list(alert.cmdline),
+        cwd=alert.cwd,
+        evidence={
+            "expired_scope": "24h",
+            "fingerprint": fp,
+            "original_rule": alert.rule,
+            **({"flags": sorted(alert_flag_set(alert))} if alert_flag_set(alert) else {}),
+        },
+        parent=alert.parent,
+        paths=alert.paths,
+        writer_pid=alert.writer_pid,
+        hashes=alert.hashes,
+    )
 
 
 def _exe_basename(exe: str) -> str:
@@ -334,6 +363,7 @@ class Daemon:
         )
         window = float(cfg.get("coalesce_window", DEFAULT_COALESCE_WINDOW))
         self._clock = cfg.get("clock", time.monotonic)
+        self._wall_clock = cfg.get("wall_clock", lambda: datetime.now(timezone.utc))
         self.coalescer = Coalescer(window_sec=window, clock=self._clock)
         self._extra_flags = list(cfg.get("extra_bypass_flags") or [])
         known = cfg.get("known_basenames")
@@ -443,8 +473,12 @@ class Daemon:
                 continue
 
     def emit(self, alert: Alert) -> None:
-        if _is_alert_allowed(alert):
+        decision, fp = _allow_decision(alert, self._wall_clock())
+        if decision == "allowed":
             return
+        if decision == "expired":
+            remove(fp)
+            alert = expired_alert(alert, fp)
         if not self.coalescer.should_emit(coalesce_key(alert)):
             return
         append_alert(alert)
@@ -664,6 +698,7 @@ class Daemon:
 
     def run(self) -> None:
         if not self._stopped():
+            clear_session()
             self._ensure_watchlist()
             self._rebuild_watches()
         try:

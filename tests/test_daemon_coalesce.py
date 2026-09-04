@@ -426,3 +426,78 @@ def test_load_watchlist_parents_and_kinds(tmp_path, monkeypatch):
     assert tmp_path / ".claude" / "hooks" / "x.sh" in roots
     assert tmp_path / ".claude" / "hooks" in roots
     assert tmp_path / ".claude" / "transcript.txt" not in roots
+
+
+def _bypass(cwd="/tmp/scratch", pid=1):
+    return Alert.new(
+        rule="R-BYPASS",
+        severity="high",
+        summary="claude started with --yolo",
+        pids=[pid],
+        exe="/usr/bin/claude",
+        basename="claude",
+        cmdline=["claude", "--yolo"],
+        cwd=cwd,
+        evidence={"flag": "--yolo", "flags": ["--yolo"]},
+    )
+
+
+def test_forever_scope_is_global(tmp_path, monkeypatch):
+    from sentinel.allowlist import approve, clear_session, fingerprint
+
+    d = _daemon(tmp_path, monkeypatch)
+    clear_session()
+    approve(fingerprint("R-BYPASS", "claude", frozenset(["--yolo"]), ""), "forever", "")
+    for cwd in ("/a/b/c/d", "/a/b", "/x/y"):
+        d.emit(_bypass(cwd=cwd))
+    assert list(iter_alerts()) == []
+
+
+def test_this_repo_scope_reaches_repo_root(tmp_path, monkeypatch):
+    from sentinel.allowlist import approve, clear_session, fingerprint
+
+    d = _daemon(tmp_path, monkeypatch)
+    clear_session()
+    root = tmp_path / "repo"
+    (root / ".git").mkdir(parents=True)
+    approve(fingerprint("R-BYPASS", "claude", frozenset(["--yolo"]), str(root)), "this-repo", str(root))
+    d.emit(_bypass(cwd=str(root)))
+    d.emit(_bypass(cwd=str(root / "other")))
+    assert list(iter_alerts()) == []
+    d.emit(_bypass(cwd=str(tmp_path / "sibling")))
+    assert len(list(iter_alerts())) == 1
+
+
+def test_session_scope_crosses_process_boundary_until_restart(tmp_path, monkeypatch):
+    from sentinel.allowlist import approve, clear_session, fingerprint
+
+    d = _daemon(tmp_path, monkeypatch)  # sets XDG_STATE_HOME before any allowlist write
+    clear_session()
+    # sentinel-action runs in another process; only the file can carry the approval.
+    approve(fingerprint("R-BYPASS", "claude", frozenset(["--yolo"]), ""), "session", "")
+    d.emit(_bypass())
+    assert list(iter_alerts()) == []
+    clear_session()  # what the daemon does at startup
+    d2 = _daemon(tmp_path, monkeypatch)
+    d2.emit(_bypass(cwd="/tmp/other"))
+    assert len(list(iter_alerts())) == 1
+
+
+def test_24h_expiry_emits_allow_expire_once_then_normal(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from sentinel.allowlist import _load_persisted, approve, clear_session, fingerprint
+
+    later = datetime.now(timezone.utc) + timedelta(hours=25)
+    d = _daemon(tmp_path, monkeypatch, wall_clock=lambda: later)
+    clear_session()
+    fp = fingerprint("R-BYPASS", "claude", frozenset(["--yolo"]), "")
+    approve(fp, "24h", "")
+    d.emit(_bypass())
+    rows = list(iter_alerts())
+    assert [r.rule for r in rows] == ["R-ALLOW-EXPIRE"]
+    assert rows[0].severity == "low"
+    assert rows[0].evidence["fingerprint"] == fp
+    assert fp not in _load_persisted()
+    d.emit(_bypass(pid=2))
+    assert [r.rule for r in list(iter_alerts())] == ["R-ALLOW-EXPIRE", "R-BYPASS"]
