@@ -326,10 +326,6 @@ def _read_cmdline(pid_dir: Path) -> list[str]:
     return [p.decode("utf-8", "surrogateescape") for p in raw.split(b"\0") if p]
 
 
-def _noop_notify(alert: Alert) -> None:
-    return None
-
-
 class Daemon:
     def __init__(self, config: Mapping[str, Any] | None = None) -> None:
         cfg = dict(config or {})
@@ -344,7 +340,12 @@ class Daemon:
         self._known = (
             set(known) if known is not None else set(DEFAULT_AGENT_BASENAMES)
         )
-        self._notify: Callable[[Alert], None] = cfg.get("notify") or _noop_notify
+        if "notify" in cfg and cfg["notify"] is not None:
+            self._notify: Callable[[Alert], None] = cfg["notify"]
+        else:
+            from sentinel.notify import send_alert
+
+            self._notify = send_alert
         self._stop = cfg.get("stop")
         self._proc_root = Path(cfg.get("proc_root", "/proc"))
         self._home = Path(cfg.get("home", Path.home()))

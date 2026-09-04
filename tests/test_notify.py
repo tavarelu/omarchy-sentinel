@@ -1,0 +1,63 @@
+from __future__ import annotations
+
+from sentinel.models import Alert
+from sentinel.notify import send_alert
+
+
+def _alert(**overrides) -> Alert:
+    data = dict(
+        rule="R-BYPASS",
+        severity="high",
+        summary="bypass flags",
+        pids=[1234],
+        exe="/usr/bin/claude",
+        basename="claude",
+        cmdline=["claude", "--dangerously-skip-permissions"],
+        cwd="/home/tav/Work/scratch",
+        evidence={"flag": "--dangerously-skip-permissions"},
+    )
+    data.update(overrides)
+    return Alert.new(**data)
+
+
+def test_notify_builds_critical_for_high(monkeypatch):
+    calls = []
+    monkeypatch.setattr("sentinel.notify.run", lambda argv: calls.append(argv))
+    alert = _alert(severity="high")
+    send_alert(alert)
+    assert len(calls) == 1
+    argv = calls[0]
+    assert argv[0:3] == ["omarchy", "notification", "send"]
+    assert "-u" in argv and argv[argv.index("-u") + 1] == "critical"
+    assert "--app-name" in argv and argv[argv.index("--app-name") + 1] == "Sentinel"
+    assert f"HIGH: {alert.summary}" in argv
+    assert "claude — --dangerously-skip-permissions (scratch)" in argv
+    exec_i = argv.index("--exec")
+    assert argv[exec_i:] == ["--exec", "sentinel-action", alert.id, "menu"]
+    assert exec_i == len(argv) - 4
+
+
+def test_notify_urgency_medium_and_low(monkeypatch):
+    calls = []
+    monkeypatch.setattr("sentinel.notify.run", lambda argv: calls.append(argv))
+
+    send_alert(_alert(severity="medium", summary="watched write", basename="nano",
+                      evidence={"path": "/tmp/hooks/pre.sh"}, cwd="/tmp/hooks"))
+    assert calls[0][calls[0].index("-u") + 1] == "normal"
+    assert "MEDIUM: watched write" in calls[0]
+    assert "nano — pre.sh (hooks)" in calls[0]
+
+    send_alert(_alert(severity="low", summary="noise", basename="inotify",
+                      evidence={"event": "IN_Q_OVERFLOW"}, cwd=""))
+    assert calls[1][calls[1].index("-u") + 1] == "low"
+    assert "LOW: noise" in calls[1]
+    assert "inotify — IN_Q_OVERFLOW ()" in calls[1]
+
+
+def test_notify_unknown_severity_defaults_normal(monkeypatch):
+    calls = []
+    monkeypatch.setattr("sentinel.notify.run", lambda argv: calls.append(argv))
+    send_alert(_alert(severity="weird", summary="x", evidence={}))
+    assert calls[0][calls[0].index("-u") + 1] == "normal"
+    # why falls back to rule when evidence has no flag/path/event
+    assert "claude — R-BYPASS (scratch)" in calls[0]
