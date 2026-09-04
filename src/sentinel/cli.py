@@ -64,10 +64,9 @@ def scout_main(argv: list[str] | None = None) -> int:
 
 
 def action_main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="sentinel-action")
-    parser.parse_args(argv)
-    parser.print_help()
-    return 0
+    from sentinel.action import action_main as _action_main
+
+    return _action_main(argv)
 
 
 if __name__ == "__main__":
