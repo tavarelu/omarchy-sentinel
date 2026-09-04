@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodic Sentinel Track A health check
+Documentation=file://@SENTINEL_REPO@/docs/superpowers/specs/2026-09-03-omarchy-sentinel-design.md
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=45min
+AccuracySec=1min
+Persistent=true
+Unit=sentinel-health.service
+
+[Install]
+WantedBy=timers.target

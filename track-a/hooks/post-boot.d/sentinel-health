@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Omarchy post-boot: sticky Track A health check → health.json
+# Placeholder @SENTINEL_REPO@ is rewritten by scripts/install-track-a.sh
+set -euo pipefail
+
+REPO="${SENTINEL_REPO:-@SENTINEL_REPO@}"
+PY="$REPO/.venv/bin/python"
+
+if [[ ! -x "$PY" ]]; then
+  echo "sentinel-health: missing $PY" >&2
+  exit 1
+fi
+
+exec "$PY" -m sentinel.health --source post-boot --warn-daemon

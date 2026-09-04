@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Omarchy post-update: re-verify T2 packages + health, refresh inventory.
+# Placeholder @SENTINEL_REPO@ is rewritten by scripts/install-track-a.sh
+# Do not install battery-low hooks from this path.
+set -euo pipefail
+
+REPO="${SENTINEL_REPO:-@SENTINEL_REPO@}"
+PY="$REPO/.venv/bin/python"
+SCOUT="$REPO/.venv/bin/sentinel-scout"
+
+if [[ ! -x "$PY" ]]; then
+  echo "sentinel-recheck: missing $PY" >&2
+  exit 1
+fi
+
+missing=()
+for pkg in linux-t2 apple-bcm-firmware t2fanrd; do
+  if ! pacman -Q "$pkg" >/dev/null 2>&1; then
+    missing+=("$pkg")
+  fi
+done
+
+if ((${#missing[@]})); then
+  msg="missing packages after update: ${missing[*]}"
+  echo "sentinel-recheck: $msg" >&2
+  if command -v omarchy >/dev/null 2>&1; then
+    omarchy notification send -u critical "Sentinel post-update" "$msg" || true
+  fi
+fi
+
+"$PY" -m sentinel.health --source post-update --warn-daemon
+
+if [[ -x "$SCOUT" ]]; then
+  "$SCOUT" --refresh || true
+fi
