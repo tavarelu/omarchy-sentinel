@@ -86,14 +86,27 @@ BarWidget {
   onBarChanged: injectPanel()
   onSettingsChanged: injectPanel()
 
+  // Never reload synchronously from fileChanged: on a file that does not
+  // exist yet the signal re-fires inside reload() and the pair recurses until
+  // the QML stack overflows (seen live as "Maximum call stack size exceeded"
+  // every 30 s). Debounce through a timer, and do not chain reloads while the
+  // file is missing; the 30 s timer picks it up once it appears.
   FileView {
     id: alertsFile
     path: root.stateDir + "/alerts.jsonl"
     watchChanges: true
     printErrors: false
-    onFileChanged: reload()
-    onLoaded: root.allRows = Model.parseAlerts(text())
-    onLoadFailed: root.allRows = []
+    property bool missing: false
+    onFileChanged: if (!missing) alertsReload.restart()
+    onLoaded: { missing = false; root.allRows = Model.parseAlerts(text()) }
+    onLoadFailed: { missing = true; root.allRows = [] }
+  }
+
+  Timer {
+    id: alertsReload
+    interval: 150
+    repeat: false
+    onTriggered: alertsFile.reload()
   }
 
   FileView {
@@ -101,9 +114,17 @@ BarWidget {
     path: root.stateDir + "/pause_until"
     watchChanges: true
     printErrors: false
-    onFileChanged: reload()
-    onLoaded: root.pauseUntilMs = Model.parsePauseUntil(text())
-    onLoadFailed: root.pauseUntilMs = 0
+    property bool missing: false
+    onFileChanged: if (!missing) pauseReload.restart()
+    onLoaded: { missing = false; root.pauseUntilMs = Model.parsePauseUntil(text()) }
+    onLoadFailed: { missing = true; root.pauseUntilMs = 0 }
+  }
+
+  Timer {
+    id: pauseReload
+    interval: 150
+    repeat: false
+    onTriggered: pauseFile.reload()
   }
 
   // The state directory may not exist until the daemon first runs; a file
