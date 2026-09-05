@@ -21,6 +21,7 @@ Implemented by: Chief (Claude), because Grok was unreachable and its usage is me
 | 7 (new) | CONFIRMED | session scope was stored in a module dict of the `sentinel-action` process and never reached the daemon; now a file the daemon clears at start. |
 
 ## Deviations
+- Migration note: `allowlist.json` keeps its shape (`{"entries": {...}}`) and existing entries keep working; the only new file is `allowlist-session.json` in the state dir, treated as operational and deleted by the daemon at startup. No Owner data migration.
 - Added claim 7 and its fix (session scope did not survive the process boundary). Not in the packet; it made the `session` scope a no-op in production.
 - `summarize._flag_list` left as is: it must keep evidence order for a stable payload; `keys.alert_flag_set` is a set for keying only.
 - `is_allowed` kept as a thin wrapper over `decide` for existing tests.
@@ -32,7 +33,7 @@ Implemented by: Chief (Claude), because Grok was unreachable and its usage is me
 - none filed by the implementer; the reviewer may file.
 
 ## Self-review
-- reviewer: pending (Grok read-only review requested).
+- reviewer: Grok Build, READY (`docs/collab/reviews/W3-01-grok-review.md`); its five tasks were applied in the follow-up commit: two new assertions in test_keys, expired_scope assertion, this migration note, and tests/conftest.py isolating XDG for every test.
 - auditor: Chief self-check: no file bodies read; daemon imports unchanged except `datetime`; no kill path touched; no secrets. One test initially wrote to the live state dir before the temp env was set; fixed and the stray file removed.
 
 ## Acceptance output

@@ -498,6 +498,8 @@ def test_24h_expiry_emits_allow_expire_once_then_normal(tmp_path, monkeypatch):
     assert [r.rule for r in rows] == ["R-ALLOW-EXPIRE"]
     assert rows[0].severity == "low"
     assert rows[0].evidence["fingerprint"] == fp
+    assert rows[0].evidence["expired_scope"] == "24h"
+    assert rows[0].evidence["original_rule"] == "R-BYPASS"
     assert fp not in _load_persisted()
     d.emit(_bypass(pid=2))
     assert [r.rule for r in list(iter_alerts())] == ["R-ALLOW-EXPIRE", "R-BYPASS"]

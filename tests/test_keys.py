@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from sentinel.allowlist import fingerprint
 from sentinel.keys import (
     alert_flag_set,
     alert_location,
@@ -90,3 +91,28 @@ def test_candidate_prefixes_global_first_then_parents():
     assert got[0] == ""
     assert got[1:] == ["/a/b/c", "/a/b", "/a", "/"]
     assert candidate_prefixes("") == [""]
+
+
+def test_global_prefix_is_distinct_from_root():
+    flags = frozenset({"--yolo"})
+    assert fingerprint("R-BYPASS", "claude", flags, "") != fingerprint("R-BYPASS", "claude", flags, "/")
+
+
+def test_this_repo_on_rself_is_exact_path(tmp_path):
+    root = tmp_path / "repo"
+    (root / ".git").mkdir(parents=True)
+    target = root / ".config" / "sentinel" / "config.toml"
+    w = Alert.new(
+        rule="R-SELF",
+        severity="high",
+        summary="x",
+        pids=[],
+        exe="",
+        basename="",
+        cmdline=[],
+        cwd="",
+        evidence={"path": str(target)},
+        paths=[str(target)],
+    )
+    assert approval_prefix(w, "this-repo") == str(target)
+    assert approval_prefix(w, "forever") == ""
