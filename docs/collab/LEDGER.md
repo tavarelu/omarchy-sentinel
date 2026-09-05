@@ -24,11 +24,11 @@ Updated by Chief only. Grok reads it; Grok never edits it.
 | W3-06 | Docs truth (Chief) | in progress | | | |
 | W3-07 | Self-defense: tamper evidence (security review S1) | written | | | |
 | UX-00 | Hotfix: transient directory churn silent; directory events not writes | accepted, live | feature | | zero alerts from 5 lock-dir cycles against the running daemon |
-| UX-01 | Notify policy and burst mode | running (Grok, inline prompt, 40 turns, lean) | grok/UX-01 | | |
+| UX-01 | Notify policy and burst mode | Grok run cancelled at the 40-turn cap, no code; reassignment pending Owner | grok/UX-01 | | |
 | UX-02a | Investigate v2 and open-folder | packet written; next Grok run after UX-01 | | | |
 | UX-02b | Evidence v2 capture | planned, after W3-02/03/04 | | | |
 | UX-03 | Panel v2 | done `48b2eeb`, live-smoked 02:24 (chips, folder icons, wrapped legend); card actions await alerts | feature | | screenshot sent to Owner |
-| UX-04 | Risk visual canvas | planned (Chief + Owner) | | | |
+| UX-04 | Risk visual canvas | published for Owner's pick: https://claude.ai/code/artifact/036d35ed-efe5-4160-9bc0-f795721291f8 | | | D-008 pending |
 | W5-03 | Omarchy plugin (pulled forward) | scaffold live-smoked 2026-09-05: bar count, panel, cards, Dismiss round trip; three bugs fixed; shell restart required after QML edits | feature | | Owner saw screenshots |
 
 States: written, running, reported, returned, accepted, escalated.
@@ -52,8 +52,9 @@ States: written, running, reported, returned, accepted, escalated.
 | 2026-09-05 | W3-01 review, read-only sandbox | 15 | cancelled before writing |
 | 2026-09-05 | resume of the same session | 30 | cancelled before writing |
 | 2026-09-05 | W3-01 review, diff inline, no tools | 2 | READY, 752 words |
+| 2026-09-05 | UX-01 implementation, inline packet + sources, sandbox workspace | 40 | cancelled at the cap while re-reading files whose inline copies carried stale line numbers; 0 commits |
 
-Lesson: give Grok the material inline and cap turns low; tool-driven exploration burns the budget.
+Lessons: give Grok the material inline and cap turns low for reviews; `--max-turns` counts tool calls, so an implementation packet needs about 100 to 120; never cite line numbers in a packet that Grok will compare against the tree.
 
 ## Live evidence log
 
