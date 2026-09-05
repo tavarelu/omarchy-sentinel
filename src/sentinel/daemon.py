@@ -389,9 +389,12 @@ class Daemon:
         if "notify" in cfg and cfg["notify"] is not None:
             self._notify: Callable[[Alert], None] = cfg["notify"]
         else:
-            from sentinel.notify import send_alert
+            from sentinel.notify import Notifier, load_policy
 
-            self._notify = send_alert
+            self._notify = Notifier(
+                load_policy(),
+                clock=lambda: self._wall_clock().timestamp(),
+            ).send
         self._stop = cfg.get("stop")
         self._proc_root = Path(cfg.get("proc_root", "/proc"))
         self._home = Path(cfg.get("home", Path.home()))

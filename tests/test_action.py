@@ -327,3 +327,47 @@ def test_kill_passes_recorded_starttime(monkeypatch, tmp_path):
     monkeypatch.setattr("sentinel.action.execute_kill", lambda plan: None)
     assert action_main([alert.id, "kill", "--yes"]) == 0
     assert seen["expected_starttime"] == {101: 500}
+
+
+def test_notify_prints_effective_policy_and_sources(monkeypatch, tmp_path, capsys):
+    assert action_main(["notify"]) == 0
+    out = capsys.readouterr().out
+    assert "high    on " in out and "low     off" in out and "source: config" in out
+    assert "sticky" in out and "burst" in out and "prefs" in out
+
+
+def test_notify_severity_writes_prefs_merged_0600(monkeypatch, tmp_path):
+    import json
+    import stat
+
+    from sentinel.notify import prefs_path
+
+    assert action_main(["notify", "--severity", "low=on"]) == 0
+    assert action_main(["notify", "--severity", "high=off"]) == 0
+    data = json.loads(prefs_path().read_text())
+    assert data["severities"] == {"high": False, "low": True}
+    assert stat.S_IMODE(prefs_path().stat().st_mode) == 0o600
+
+
+def test_notify_rejects_bad_value(capsys):
+    assert action_main(["notify", "--severity", "high=maybe"]) == 1
+    assert "invalid" in capsys.readouterr().err
+
+
+def test_notify_reset_removes_file():
+    from sentinel.notify import prefs_path
+
+    action_main(["notify", "--severity", "low=on"])
+    assert prefs_path().exists()
+    assert action_main(["notify", "--reset"]) == 0
+    assert not prefs_path().exists()
+
+
+def test_notify_json_output(capsys):
+    import json
+
+    action_main(["notify", "--severity", "medium=off"])
+    capsys.readouterr()
+    assert action_main(["notify", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["medium"] is False and data["source"]["medium"] == "prefs" and data["source"]["high"] == "config"

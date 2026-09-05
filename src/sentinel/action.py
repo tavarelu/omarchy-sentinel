@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 import tomllib
@@ -34,6 +35,7 @@ COMMANDS = frozenset(
         "list",
         "status",
         "pause",
+        "notify",
     }
 )
 _DURATION_RE = re.compile(r"^(\d+)([smhd])$", re.IGNORECASE)
@@ -293,6 +295,50 @@ def alert_is_stale(alert: Alert, now: datetime | None = None) -> bool:
     return when - ts > STALE_AFTER
 
 
+def _parse_severity_flag(text: str) -> tuple[str, bool]:
+    name, sep, value = text.partition("=")
+    name = name.strip().lower()
+    value = value.strip().lower()
+    if not sep or name not in ("high", "medium", "low") or value not in ("on", "off"):
+        raise ValueError(f"invalid --severity {text!r} (use high|medium|low=on|off)")
+    return name, value == "on"
+
+
+def cmd_notify(severities: list[str], *, reset: bool = False, as_json: bool = False) -> int:
+    from sentinel.notify import SEVERITIES, STICKY_EVENTS, effective_policy, load_policy, load_prefs, prefs_path, write_prefs
+
+    if reset:
+        try:
+            prefs_path().unlink()
+        except FileNotFoundError:
+            pass
+    if severities:
+        try:
+            flags = dict(_parse_severity_flag(s) for s in severities)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        write_prefs(flags)
+    policy = load_policy()
+    prefs = load_prefs() or {}
+    eff = effective_policy(policy, prefs)
+    if as_json:
+        out = {name: getattr(eff, name).enabled for name in SEVERITIES}
+        out["source"] = {name: ("prefs" if name in prefs else "config") for name in SEVERITIES}
+        out["prefs_path"] = str(prefs_path())
+        print(json.dumps(out, sort_keys=True))
+        return 0
+    for name in SEVERITIES:
+        sp = getattr(eff, name)
+        source = "prefs" if name in prefs else "config"
+        print(f"{name:7s} {'on ' if sp.enabled else 'off'}  ({sp.urgency}, {sp.timeout_ms // 1000} s)   source: {source}")
+    print(f"sticky  R-SELF {', '.join(sorted(STICKY_EVENTS))}  (critical, never expires)")
+    b = eff.burst
+    print(f"burst   {b.threshold} toasts / {int(b.window_sec)} s → summary; resets after {int(b.quiet_sec)} s quiet")
+    print(f"prefs   {prefs_path()}")
+    return 0
+
+
 def cmd_kill(alert_id: str, *, session: bool, yes: bool, force_stale: bool = False) -> int:
     try:
         alert = get_alert(alert_id)
@@ -396,6 +442,11 @@ def action_main(argv: list[str] | None = None) -> int:
     pause_p = sub.add_parser("pause", help="Suppress notifications for a duration")
     pause_p.add_argument("duration", nargs="?", default="1h")
 
+    notify_p = sub.add_parser("notify", help="Show or change which severities toast (shared with the panel)")
+    notify_p.add_argument("--severity", action="append", default=[], metavar="SEV=on|off")
+    notify_p.add_argument("--reset", action="store_true", help="Remove runtime preferences; config defaults apply")
+    notify_p.add_argument("--json", action="store_true", help="Machine-readable output")
+
     if not argv:
         parser.print_help()
         return 0
@@ -422,5 +473,7 @@ def action_main(argv: list[str] | None = None) -> int:
         return cmd_status()
     if args.command == "pause":
         return cmd_pause(args.duration)
+    if args.command == "notify":
+        return cmd_notify(args.severity, reset=args.reset, as_json=args.json)
     parser.print_help()
     return 0

@@ -4,3 +4,19 @@
 
 [kill]
 precious_worktrees = []
+
+# Toast policy. Omarchy caps non-critical toasts at 30 s and lets critical
+# ones stay until clicked; Sentinel uses critical only for tamper alerts.
+# Per-severity on/off at runtime: `sentinel-action notify --severity low=on`
+# (stored in ~/.local/state/sentinel/notify-prefs.json; overrides toast_*).
+[notify]
+toast_high = true
+toast_medium = true
+toast_low = false
+high_timeout = 30       # seconds, 1..30
+medium_timeout = 15
+low_timeout = 5
+burst_threshold = 5     # individual toasts inside burst_window before one summary toast takes over
+burst_window = 300      # seconds
+burst_quiet = 600       # seconds without a toast before the burst resets
+plugin_id = "tav.sentinel"   # the panel a summary toast opens
