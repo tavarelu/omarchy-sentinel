@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "tav.sentinel",
+  "name": "Sentinel",
+  "version": "0.1.0",
+  "author": "Luis Tav",
+  "license": "Apache-2.0",
+  "description": "Watches your AI coding agents for bypass flags, hook tampering, and surprise shells; approve, kill, or investigate from the bar.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "Sentinel",
+    "description": "Open-alert count in the bar and a panel that lists what your coding agents did that changed the shape of a session: bypass flags, hook or settings writes, surprise shells. Approve with a scope, kill the child, investigate, or dismiss. Installs and manages the Sentinel daemon.",
+    "category": "AI",
+    "aliases": ["sentinel", "agent-guard"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "cliPath": "",
+      "showLowSeverity": false
+    },
+    "schema": [
+      { "key": "cliPath", "type": "path", "label": "sentinel-action path", "defaultValue": "", "description": "Optional. Absolute path to sentinel-action. Empty means resolve it from PATH." },
+      { "key": "showLowSeverity", "type": "boolean", "label": "Show low-severity alerts", "defaultValue": false }
+    ]
+  }
+}

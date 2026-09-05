@@ -34,7 +34,7 @@ Exit: G2 passes, the noise budget holds for seven days on the Owner's machine.
 
 - W5-01 Name and license. "Sentinel" collides with several security products; Owner picks the public name (D-002) and the license (D-003).
 - W5-02 Packaging: wheel via pyproject, an AUR PKGBUILD, binaries on PATH, systemd units with installed absolute ExecStart, config template installed to `~/.config/<name>/`.
-- W5-03 Omarchy integration done right: menu `provider` listing live alerts, bar widget with the open count as an Omarchy shell plugin, floating-terminal click path.
+- W5-03 Omarchy plugin: `manifest.json` at the repo root, `BarWidget.qml` with the open-alert count, `Panel.qml` listing alerts with Approve, Kill, Investigate and Dismiss, plus an install-daemon button (D-004). Publish through the marketplace issue form; see `docs/collab/PUBLISHING.md`. Scaffolded by Chief 2026-09-04 so the shape is settled before wave 3 finishes.
 - W5-04 CI: pytest, ruff, shellcheck, `systemd-analyze verify`, a fake-/proc integration test, SkillSpector run on the repo itself.
 - W5-05 Docs: README for humans, threat model, SECURITY.md with disclosure policy, CONTRIBUTING.md, CHANGELOG.
 - W5-06 Adapters: Codex config bypass keys, Gemini CLI, Cursor agent, Grok Build config bypass, each with a test fixture.
