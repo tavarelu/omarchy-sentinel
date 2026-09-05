@@ -5,10 +5,10 @@ Updated by Chief only. Grok reads it; Grok never edits it.
 | Field | Value |
 |-------|-------|
 | Integration branch | `feature/omarchy-sentinel` |
-| HEAD at last update | `6943f5e` |
+| HEAD at last update | `72031f6` |
 | Last reviewed range | `..4ebfb5d` (wave 1, R&D + Chief) |
 | Unreviewed commits | `e0f2c86`, `30533f6`, `c015834` (wave 2, no R&D audit) |
-| Tests | 133 passed |
+| Tests | 151 passed |
 | Live install | plugin `tav.sentinel` enabled in the bar; daemon package installed via scripts/install-daemon.sh; **`sentinel.service` running since 2026-09-05 00:33 (Owner started it)**; inventory timer enabled; no wrappers, hooks, or menu rows |
 | Canonical checkout | `~/Work/sentinel` at `1161091` (docs only, no venv); all code is on the feature branch in this worktree |
 
@@ -17,7 +17,7 @@ Updated by Chief only. Grok reads it; Grok never edits it.
 | ID | Title | State | Branch | Report | Verdict |
 |----|-------|-------|--------|--------|---------|
 | W3-01 | Allowlist and Approve correctness | accepted, merged `cfd221c` | claude/W3-01 | reports/W3-01-report.md | Grok READY (reviews/W3-01-grok-review.md) |
-| W3-02 | One alert per process instance, safe kill, store hygiene | written | | | |
+| W3-02 | One alert per process instance, safe kill, store hygiene | accepted (Chief implemented) `72031f6` | feature | reports/W3-02-report.md | pending Grok review (inline) |
 | W3-03 | Scout v2 | written | | | |
 | W3-04 | Wire R-CHILD-SHELL | written, waits for W3-02 | | | |
 | W3-05 | Vendor bypass table, install truth, click path | written | | | |
