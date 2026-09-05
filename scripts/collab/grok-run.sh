@@ -59,6 +59,7 @@ Work only in this worktree on branch $BRANCH. Fact-check every numbered Context 
 Finish by writing docs/collab/reports/$ID-report.md (format: docs/collab/reports/TEMPLATE.md) and any asks under docs/collab/asks/ (format: docs/collab/asks/TEMPLATE.md), and commit them with the trailer "Packet: $ID".
 Run the full suite with .venv/bin/pytest -q and put the real count in the report.
 PROMPT
+fi
 
 CMD=(grok --prompt-file "$PROMPT_FILE" --cwd "$WT_DIR"
   --output-format json --permission-mode dontAsk --sandbox workspace
