@@ -2,6 +2,8 @@
 # Run one task packet with Grok Build headless in an isolated branch + worktree.
 # Usage: scripts/collab/grok-run.sh <PACKET-ID> [--dry-run] [--max-turns N] [--lean] [--resume]
 # --resume continues the packet's previous Grok session (for a RETURNed packet) instead of starting fresh.
+# --prompt-file uses a prepared prompt (packet + sources inline) instead of pointing Grok at files; this
+# is the budget-friendly path: reading costs turns, inline material does not.
 # Grok usage is metered: the run preflights connectivity so it cannot burn quota retrying,
 # defaults to 40 turns, and --lean disables subagents for small packets.
 # Creates branch grok/<ID> from the current branch, a worktree at .worktrees/grok-<ID>,
@@ -14,13 +16,14 @@ if [[ $# -lt 1 ]]; then
   exit 2
 fi
 ID="$1"; shift
-DRY=0; MAX_TURNS=40; LEAN=0; RESUME=0
+DRY=0; MAX_TURNS=40; LEAN=0; RESUME=0; PROMPT_OVERRIDE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY=1; shift ;;
     --max-turns) MAX_TURNS="$2"; shift 2 ;;
     --lean) LEAN=1; shift ;;
     --resume) RESUME=1; shift ;;
+    --prompt-file) PROMPT_OVERRIDE="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -49,6 +52,7 @@ else
   SESSION_ARGS=(-s "$SID")
 fi
 
+if [[ -n "$PROMPT_OVERRIDE" ]]; then cp "$PROMPT_OVERRIDE" "$PROMPT_FILE"; else
 cat >"$PROMPT_FILE" <<PROMPT
 You are the Lead Developer. Read AGENTS.md and docs/collab/PROTOCOL.md, then execute packet $ID at docs/collab/packets/$(basename "$PACKET").
 Work only in this worktree on branch $BRANCH. Fact-check every numbered Context claim first. Use the implementer, reviewer, and auditor roles.
