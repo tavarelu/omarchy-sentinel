@@ -367,7 +367,7 @@ def test_move_self_triggers_watch_lost(tmp_path, monkeypatch):
 
     d = _daemon(tmp_path, monkeypatch)
     called: list[str] = []
-    d.handle_watch_lost = lambda path=None: called.append("lost")
+    d.handle_watch_lost = lambda path=None, mask=0: called.append("lost")
 
     class FakeIno:
         wd_to_path = {1: tmp_path / "hooks"}
@@ -378,6 +378,74 @@ def test_move_self_triggers_watch_lost(tmp_path, monkeypatch):
     d._inotify = FakeIno()
     d._drain_inotify()
     assert called == ["lost"]
+
+
+def test_transient_subdir_loss_is_silent(tmp_path, monkeypatch):
+    """A directory that appears under a watched dir and vanishes again (a lock
+    dir) must not raise an alert or trigger a watchlist refresh."""
+    from sentinel.daemon import IN_CREATE, IN_DELETE_SELF, IN_ISDIR, InotifyEvent
+
+    d = _daemon(tmp_path, monkeypatch)
+    lost: list[str] = []
+    d.handle_watch_lost = lambda path=None, mask=0: lost.append(str(path))
+    refreshed: list[str] = []
+    monkeypatch.setattr("sentinel.daemon.refresh_watchlist", lambda home=None: refreshed.append("r"))
+
+    class FakeIno:
+        wd_to_path = {1: tmp_path / ".claude"}
+        added: list = []
+
+        def add_watch(self, path, mask=0):
+            self.added.append(path)
+            self.wd_to_path[2] = path
+            return 2
+
+        def read_events(self):
+            return [
+                InotifyEvent(wd=1, mask=IN_CREATE | IN_ISDIR, cookie=0, name="history.jsonl.lock"),
+                InotifyEvent(wd=2, mask=IN_DELETE_SELF, cookie=0, name=""),
+            ]
+
+    d._inotify = FakeIno()
+    d._drain_inotify()
+    assert lost == []
+    assert refreshed == []
+    assert list(iter_alerts()) == []
+    assert 2 not in d._auto_wds
+
+
+def test_real_inotify_lock_dir_churn_is_silent(tmp_path, monkeypatch):
+    import os
+
+    watched = tmp_path / "claude"
+    watched.mkdir()
+    refreshed: list[str] = []
+    monkeypatch.setattr("sentinel.daemon.refresh_watchlist", lambda home=None: refreshed.append("r"))
+    d = _daemon(tmp_path, monkeypatch, inotify=True, watch_paths=[str(watched)], self_paths=[str(tmp_path / "self")])
+    d._rebuild_watches()
+    assert d._inotify is not None
+    for _ in range(20):
+        lock = watched / "history.jsonl.lock"
+        lock.mkdir()
+        d._drain_inotify()
+        lock.rmdir()
+        d._drain_inotify()
+    d._drain_inotify()
+    d._close_inotify()
+    assert refreshed == []
+    assert list(iter_alerts()) == []
+
+
+def test_root_loss_still_alerts_with_real_event_name(tmp_path, monkeypatch):
+    from sentinel.daemon import IN_DELETE_SELF
+
+    d = _daemon(tmp_path, monkeypatch)
+    monkeypatch.setattr("sentinel.daemon.refresh_watchlist", lambda home=None: tmp_path / "watchlist.json")
+    d.handle_watch_lost(tmp_path / "hooks", IN_DELETE_SELF)
+    rows = list(iter_alerts())
+    assert len(rows) == 1
+    assert rows[0].evidence["event"] == "IN_DELETE_SELF"
+    assert "deleted" in rows[0].summary
 
 
 def test_handle_watch_lost_refreshes(tmp_path, monkeypatch):

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import ctypes
@@ -389,6 +390,10 @@ class Daemon:
         )
         self._watch_roots: list[Path] = list(self._watch_override or [])
         self._inotify: Inotify | None = None
+        # Watch descriptors added for directories that appeared under a watched
+        # dir at runtime (Claude Code's history.jsonl.lock is one). They are
+        # transient by nature; losing one is not a lost root.
+        self._auto_wds: set[int] = set()
         self._self_refresh = False
         path = launches_path()
         try:
@@ -459,6 +464,7 @@ class Daemon:
 
     def _rebuild_watches(self) -> None:
         self._close_inotify()
+        self._auto_wds = set()
         if not self._enable_inotify:
             return
         try:
@@ -551,18 +557,20 @@ class Daemon:
         finally:
             self._self_refresh = False
 
-    def handle_watch_lost(self, path: Path | None = None) -> None:
+    def handle_watch_lost(self, path: Path | None = None, mask: int = 0) -> None:
         loc = str(path) if path is not None else ""
+        event = "IN_DELETE_SELF" if mask & IN_DELETE_SELF else "IN_MOVE_SELF"
+        verb = "deleted" if event == "IN_DELETE_SELF" else "moved"
         alert = Alert.new(
             rule="R-SELF",
             severity="medium",
-            summary="watched path moved or deleted; refreshing watchlist",
+            summary=f"watched root {verb}; refreshing watchlist",
             pids=[],
             exe="",
             basename="inotify",
             cmdline=[],
             cwd=loc,
-            evidence={"event": "IN_MOVE_SELF", "path": loc},
+            evidence={"event": event, "path": loc},
         )
         self.emit(alert)
         self._self_refresh = True
@@ -668,6 +676,7 @@ class Daemon:
             return
         overflow = False
         lost: Path | None = None
+        lost_mask = 0
         lost_any = False
         for event in self._inotify.read_events():
             if event.mask & IN_Q_OVERFLOW:
@@ -679,22 +688,33 @@ class Daemon:
             path = (base / event.name) if event.name else base
             if event.mask & IN_CREATE and event.mask & IN_ISDIR:
                 try:
-                    self._inotify.add_watch(path)
+                    self._auto_wds.add(self._inotify.add_watch(path))
                 except OSError:
                     pass
+            if event.mask & IN_ISDIR and not event.mask & (IN_DELETE_SELF | IN_MOVE_SELF):
+                # A directory appearing, moving or vanishing is not a content
+                # write; the files inside it raise their own events.
+                continue
             if event.mask & (IN_DELETE_SELF | IN_MOVE_SELF):
                 self._inotify.wd_to_path.pop(event.wd, None)
+                if event.wd in self._auto_wds:
+                    # A transient directory (a lock dir, a temp dir) went away.
+                    # Not a root, not evidence, and no reason to re-inventory.
+                    self._auto_wds.discard(event.wd)
+                    continue
                 lost = path
+                lost_mask = event.mask
                 lost_any = True
                 continue
             if event.mask & IN_IGNORED:
                 self._inotify.wd_to_path.pop(event.wd, None)
+                self._auto_wds.discard(event.wd)
                 continue
             self._on_fs_event(path, event.mask)
         if overflow:
             self.handle_overflow()
         elif lost_any:
-            self.handle_watch_lost(lost)
+            self.handle_watch_lost(lost, lost_mask)
 
     def run(self) -> None:
         if not self._stopped():
