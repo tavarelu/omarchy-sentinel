@@ -46,7 +46,11 @@ omarchy-shell shell hide <id>
 omarchy plugin disable <id>; omarchy plugin enable <id> --section right
 omarchy plugin remove <id>
 ```
-Test the whole lifecycle: open, close, disable, re-enable, shell restart, removal. Remove `omarchy.clonedFrom` from the manifest before publishing if you started from a clone.
+Test the whole lifecycle: open, close, disable, re-enable, shell restart, removal.
+
+**Hot reload does not recompile QML.** On Omarchy 4.0.2 a file change inside an installed plugin logs `Local plugin changed, reloading: <id>`, but the shell re-instantiates the *cached* compiled component, so edits to `.qml` files do not take effect until `omarchy restart shell`. Verified 2026-09-05: two real fixes appeared not to work, and a bisect produced timing noise, until a restart loaded the new code. Edit, restart, then judge.
+
+**Debugging a QML error in the shell:** `journalctl --user -b | grep -E 'RangeError|<plugin-id>'`. A `RangeError: Maximum call stack size exceeded` with a bogus line number is a recursion between two of your functions or a FileView reloading itself from `onFileChanged`. Remove `omarchy.clonedFrom` from the manifest before publishing if you started from a clone.
 
 ## Publish
 1. Public GitHub repository, `manifest.json` at the root, README with Install, Usage, Configure, Remove sections, a LICENSE file, optional preview image.
