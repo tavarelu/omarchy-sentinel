@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sentinel.allowlist import SCOPES, approve, fingerprint
+from sentinel.fsutil import write_private_atomic
 from sentinel.keys import alert_flag_set, approval_prefix
 from sentinel.investigate import page_detail
 from sentinel.kill import (
@@ -64,9 +65,7 @@ def parse_duration(text: str) -> timedelta:
 def write_pause(duration: timedelta, now: datetime | None = None) -> datetime:
     when = now if now is not None else _now()
     until = when + duration
-    path = pause_until_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(until.isoformat() + "\n", encoding="utf-8")
+    write_private_atomic(pause_until_path(), until.isoformat() + "\n")
     return until
 
 
@@ -262,11 +261,52 @@ def cmd_pause(duration: str) -> int:
     return 0
 
 
-def cmd_kill(alert_id: str, *, session: bool, yes: bool) -> int:
+STALE_AFTER = timedelta(minutes=10)
+
+
+def expected_starttimes(alert: Alert) -> dict[int, int]:
+    """pid -> starttime recorded at detection, for every pid the alert names."""
+    ev = alert.evidence or {}
+    out: dict[int, int] = {}
+    table = ev.get("starttimes")
+    if isinstance(table, dict):
+        for k, v in table.items():
+            try:
+                out[int(k)] = int(v)
+            except (TypeError, ValueError):
+                continue
+    single = ev.get("starttime")
+    if single is not None and alert.pids:
+        for pid in alert.pids:
+            out.setdefault(int(pid), int(single))
+    return out
+
+
+def alert_is_stale(alert: Alert, now: datetime | None = None) -> bool:
+    try:
+        ts = datetime.fromisoformat(alert.ts)
+    except ValueError:
+        return True
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    when = now if now is not None else _now()
+    return when - ts > STALE_AFTER
+
+
+def cmd_kill(alert_id: str, *, session: bool, yes: bool, force_stale: bool = False) -> int:
     try:
         alert = get_alert(alert_id)
     except KeyError:
         print(f"unknown alert: {alert_id}", file=sys.stderr)
+        return 1
+    expected = expected_starttimes(alert)
+    if alert.pids and not expected and alert_is_stale(alert) and not force_stale:
+        print(
+            "refusing: this alert recorded no process start time and is older than "
+            "10 minutes, so its PIDs may belong to other processes now. "
+            "Re-run with --force-stale to kill anyway.",
+            file=sys.stderr,
+        )
         return 1
     precious = cwd_is_precious(alert.cwd)
     if not confirm_kill(yes=yes, session=session, precious=precious):
@@ -277,6 +317,7 @@ def cmd_kill(alert_id: str, *, session: bool, yes: bool) -> int:
             alert.pids,
             child_pids=resolve_child_pids(alert),
             mode=mode,
+            expected_starttime=expected,
         )
     except PermissionError as exc:
         print(str(exc), file=sys.stderr)
@@ -325,6 +366,11 @@ def action_main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip confirm; child kill only (precious session still needs a tty)",
     )
+    kill_p.add_argument(
+        "--force-stale",
+        action="store_true",
+        help="Kill even if the alert is old and recorded no process start time",
+    )
 
     inv_p = sub.add_parser("investigate", help="Local alert detail via $PAGER or less")
     inv_p.add_argument("alert_id")
@@ -335,7 +381,10 @@ def action_main(argv: list[str] | None = None) -> int:
     )
     sum_p.add_argument("alert_id")
 
-    dis_p = sub.add_parser("dismiss", help="Close without allowlisting")
+    dis_p = sub.add_parser(
+        "dismiss",
+        help="Close without allowlisting; final for that process instance (one alert per instance)",
+    )
     dis_p.add_argument("alert_id")
 
     menu_p = sub.add_parser("menu", help="Show per-alert actions")
@@ -358,7 +407,7 @@ def action_main(argv: list[str] | None = None) -> int:
     if args.command == "approve":
         return cmd_approve(args.alert_id, args.scope)
     if args.command == "kill":
-        return cmd_kill(args.alert_id, session=args.session, yes=args.yes)
+        return cmd_kill(args.alert_id, session=args.session, yes=args.yes, force_stale=args.force_stale)
     if args.command == "investigate":
         return cmd_investigate(args.alert_id)
     if args.command == "summarize":

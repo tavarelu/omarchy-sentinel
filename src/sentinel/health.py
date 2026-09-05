@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from sentinel.fsutil import ensure_private_dir, write_private_atomic
 from sentinel.paths import state_dir
 
 HEALTH_FILENAME = "health.json"
@@ -152,14 +153,14 @@ def _load_sticky_count() -> int:
 
 def write_health_report(report: HealthReport, *, source: str | None = None) -> Path:
     path = health_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(path.parent)
     payload = report.to_dict()
     payload["ts"] = datetime.now(timezone.utc).isoformat()
     if source:
         payload["source"] = source
     if not report.daemon_active:
         payload["warnings"] = ["sentinel.service inactive (warn only)"]
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_private_atomic(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
     return path
 
 

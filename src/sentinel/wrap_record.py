@@ -8,8 +8,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from sentinel.fsutil import open_private
 from sentinel.models import Alert
 from sentinel.paths import state_dir
+from sentinel.procinfo import instance_key, read_starttime
 from sentinel.rules import evaluate_process, extract_bypass_flags
 
 LAUNCHES_FILENAME = "launches.jsonl"
@@ -32,6 +34,7 @@ def record_launch(
     """Append one launch record to state_dir()/launches.jsonl and return it."""
     cmdline = [basename, *argv]
     flags = extract_bypass_flags(cmdline, extra_bypass_flags)
+    real_pid = pid if pid is not None else os.getpid()
     record: dict[str, Any] = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "basename": basename,
@@ -41,10 +44,11 @@ def record_launch(
         "pid": pid if pid is not None else os.getpid(),
         "ppid": ppid if ppid is not None else os.getppid(),
         "flags": flags,
+        # The wrapper shell execs into the agent, so its pid and start time
+        # survive the exec and identify the agent process instance.
+        "starttime": read_starttime(real_pid),
     }
-    path = launches_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
+    with open_private(launches_path(), "a") as f:
         f.write(json.dumps(record, separators=(",", ":")) + "\n")
     return record
 
@@ -70,6 +74,12 @@ def launch_to_alert(
     pid = record.get("pid")
     if pid is not None:
         alert.pids = [int(pid)]
+        starttime = record.get("starttime")
+        alert.evidence["starttime"] = starttime
+        alert.evidence["instance"] = instance_key(int(pid), starttime)
+    alert.evidence["source"] = "launches"
+    if record.get("ts"):
+        alert.evidence["launch_ts"] = record["ts"]
     return alert
 
 

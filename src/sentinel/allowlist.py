@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from sentinel.fsutil import write_private_atomic
 from sentinel.paths import state_dir
 
 Scope = Literal["session", "24h", "this-repo", "forever"]
@@ -54,9 +55,7 @@ def _load_file(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def _save_file(path: Path, entries: dict[str, dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump({"entries": entries}, f, separators=(",", ":"))
+    write_private_atomic(path, json.dumps({"entries": entries}, separators=(",", ":")))
 
 
 def _load_persisted() -> dict[str, dict[str, Any]]:

@@ -184,10 +184,15 @@ def _fake_proc(
     *,
     comm: str | None = None,
     exe_target: str | None = None,
+    starttime: int | None = None,
 ) -> None:
     p = root / str(pid)
-    p.mkdir(parents=True)
+    p.mkdir(parents=True, exist_ok=True)
     cwd.mkdir(parents=True, exist_ok=True)
+    if starttime is not None:
+        (p / "stat").write_text(
+            f"{pid} ({exe_name}) S 1 1 1 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 {starttime} 0 0 0\n"
+        )
     (p / "cmdline").write_bytes(b"\0".join(s.encode() for s in cmdline) + b"\0")
     (p / "comm").write_text((comm if comm is not None else exe_name) + "\n")
     (p / "exe").symlink_to(exe_target or f"/usr/bin/{exe_name}")
@@ -571,3 +576,79 @@ def test_24h_expiry_emits_allow_expire_once_then_normal(tmp_path, monkeypatch):
     assert fp not in _load_persisted()
     d.emit(_bypass(pid=2))
     assert [r.rule for r in list(iter_alerts())] == ["R-ALLOW-EXPIRE", "R-BYPASS"]
+
+
+def _bypass_proc(root, pid, cwd, starttime):
+    _fake_proc(root, pid, "claude", ["claude", "--yolo"], cwd, starttime=starttime)
+
+
+def test_same_instance_alerts_once(tmp_path, monkeypatch):
+    proc = tmp_path / "proc"
+    cwd = tmp_path / "proj"
+    _bypass_proc(proc, 4242, cwd, 777)
+    now = [1000.0]
+    toasts: list = []
+    d = _daemon(tmp_path, monkeypatch, proc_root=proc, known_basenames=["claude"], clock=lambda: now[0], sampler_interval=3.0, notify=lambda a: toasts.append(a))
+    for _ in range(100):
+        d.maybe_sample()
+        now[0] += 3.0
+    rows = list(iter_alerts())
+    assert len(rows) == 1
+    assert len(toasts) == 1
+    assert rows[0].evidence["starttime"] == 777
+    assert rows[0].evidence["instance"] == "4242:777"
+    assert rows[0].evidence["source"] == "sampler"
+
+
+def test_new_instance_same_pid_alerts_again(tmp_path, monkeypatch):
+    import shutil
+
+    proc = tmp_path / "proc"
+    cwd = tmp_path / "proj"
+    _bypass_proc(proc, 4242, cwd, 777)
+    d = _daemon(tmp_path, monkeypatch, proc_root=proc, known_basenames=["claude"])
+    d.sample_proc()
+    d.sample_proc()
+    assert len(list(iter_alerts())) == 1
+    shutil.rmtree(proc / "4242")
+    _bypass_proc(proc, 4242, cwd, 999)  # pid recycled by a new claude
+    d.sample_proc()
+    rows = list(iter_alerts())
+    assert len(rows) == 2
+    assert rows[1].evidence["instance"] == "4242:999"
+
+
+def test_seen_registry_prunes_dead(tmp_path, monkeypatch):
+    import shutil
+
+    proc = tmp_path / "proc"
+    cwd = tmp_path / "proj"
+    _bypass_proc(proc, 4242, cwd, 777)
+    d = _daemon(tmp_path, monkeypatch, proc_root=proc, known_basenames=["claude"])
+    d.sample_proc()
+    assert len(d._seen) == 1
+    shutil.rmtree(proc / "4242")
+    d.sample_proc()
+    assert d._seen == {}
+
+
+def test_launch_record_carries_instance(tmp_path, monkeypatch):
+    from sentinel.wrap_record import launch_to_alert
+
+    a = launch_to_alert({"ts": "2026-09-05T00:00:00+00:00", "basename": "claude", "cmdline": ["claude", "--yolo"], "cwd": "/p", "pid": 12, "starttime": 55})
+    assert a is not None
+    assert a.evidence["instance"] == "12:55"
+    assert a.evidence["source"] == "launches"
+    assert a.evidence["launch_ts"].startswith("2026-09-05")
+
+
+def test_pause_until_write_is_operational(tmp_path, monkeypatch):
+    from sentinel.paths import state_dir
+
+    d = _daemon(tmp_path, monkeypatch, self_paths=[str(state_dir())], watch_paths=[])
+    state_dir().mkdir(parents=True, exist_ok=True)
+    for name in ("pause_until", "alerts.lock", "alerts.jsonl.tmp", "alerts.jsonl.1", "notify-prefs.json"):
+        p = state_dir() / name
+        p.write_text("x")
+        d.handle_write(p)
+    assert list(iter_alerts()) == []

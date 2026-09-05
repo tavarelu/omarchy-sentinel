@@ -14,8 +14,13 @@ _URGENCY = {
 }
 
 
-def run(argv: list[str]) -> None:
-    subprocess.run(argv, check=False)
+def run(argv: list[str]) -> str | None:
+    """Fire a notification; never block the daemon for more than 5 s (S7)."""
+    try:
+        proc = subprocess.run(argv, check=False, capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
 
 
 def _why(alert: Alert) -> str:

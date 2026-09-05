@@ -16,9 +16,11 @@ from typing import Any
 from datetime import datetime, timezone
 
 from sentinel.allowlist import clear_session, decide, fingerprint, load_all, remove
+from sentinel.fsutil import ensure_private_dir
 from sentinel.keys import alert_flag_set, alert_location, candidate_prefixes
 from sentinel.models import Alert
 from sentinel.paths import config_dir, default_config_path, state_dir
+from sentinel.procinfo import instance_key, read_starttime
 from sentinel.rules import evaluate_process, evaluate_write
 from sentinel.scout import WATCHLIST_FILENAME, scout, write_watchlist
 from sentinel.store import append_alert
@@ -48,8 +50,15 @@ OPERATIONAL_NAMES = frozenset(
         "allowlist.json",
         "allowlist-session.json",
         "watchlist.json",
+        "pause_until",
+        "alerts.lock",
+        "alerts.jsonl.tmp",
+        "alerts.jsonl.1",
+        "notify-prefs.json",
+        "notify-burst.json",
     }
 )
+PROCESS_RULES = frozenset({"R-BYPASS", "R-CHILD-SHELL"})
 _DELETED_SUFFIX = " (deleted)"
 
 # inotify_init1 flags share values with open(2).
@@ -251,6 +260,12 @@ def load_config(
 
 
 def coalesce_key(alert: Alert) -> str:
+    """Duplicate-suppression key. Process alerts key on the process instance so
+    a recycled pid or a fresh launch is never mistaken for the previous one; the
+    seen registry, not the coalescer, dedupes the same instance."""
+    instance = (alert.evidence or {}).get("instance")
+    if instance and alert.rule in PROCESS_RULES:
+        return f"{alert.rule}|{alert.basename}|{instance}"
     loc = alert.cwd or (alert.paths[0] if alert.paths else "")
     return f"{alert.rule}|{alert.basename}|{loc}"
 
@@ -394,7 +409,8 @@ class Daemon:
         # dir at runtime (Claude Code's history.jsonl.lock is one). They are
         # transient by nature; losing one is not a lost root.
         self._auto_wds: set[int] = set()
-        self._self_refresh = False
+        # One alert per process instance: rule|pid:starttime|flags -> alert id.
+        self._seen: dict[str, str] = {}
         path = launches_path()
         try:
             self._launches_offset = path.stat().st_size if path.exists() else 0
@@ -428,14 +444,10 @@ class Daemon:
         if self._watch_override is not None:
             self._watch_roots = list(self._watch_override)
             return
-        state_dir().mkdir(parents=True, exist_ok=True)
-        config_dir().mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(state_dir())
+        ensure_private_dir(config_dir())
         if not (state_dir() / WATCHLIST_FILENAME).exists():
-            self._self_refresh = True
-            try:
-                refresh_watchlist(self._home)
-            finally:
-                self._self_refresh = False
+            refresh_watchlist(self._home)
         self._load_watch_paths()
 
     def _dirs_to_watch(self) -> list[Path]:
@@ -443,7 +455,7 @@ class Daemon:
         if self._self_override is None:
             for path in (config_dir(), state_dir()):
                 try:
-                    path.mkdir(parents=True, exist_ok=True)
+                    ensure_private_dir(path)
                 except OSError:
                     continue
         for raw in [*self._self_paths(), *self._watch_roots]:
@@ -478,6 +490,17 @@ class Daemon:
             except OSError:
                 continue
 
+    def _seen_key(self, alert: Alert) -> str | None:
+        instance = (alert.evidence or {}).get("instance")
+        if alert.rule not in PROCESS_RULES or not instance:
+            return None
+        return f"{alert.rule}|{instance}|{','.join(sorted(alert_flag_set(alert)))}"
+
+    def _prune_seen(self, live_pids: set[int]) -> None:
+        dead = [k for k in self._seen if int(k.split("|", 2)[1].split(":", 1)[0]) not in live_pids]
+        for k in dead:
+            del self._seen[k]
+
     def emit(self, alert: Alert) -> None:
         decision, fp = _allow_decision(alert, self._wall_clock())
         if decision == "allowed":
@@ -485,9 +508,14 @@ class Daemon:
         if decision == "expired":
             remove(fp)
             alert = expired_alert(alert, fp)
+        key = self._seen_key(alert)
+        if key is not None and key in self._seen:
+            return  # this process instance already has its one alert
         if not self.coalescer.should_emit(coalesce_key(alert)):
             return
         append_alert(alert)
+        if key is not None:
+            self._seen[key] = alert.id
         self._notify(alert)
 
     def handle_write(
@@ -519,6 +547,7 @@ class Daemon:
         cwd: str,
         pid: int | None = None,
         parent: dict[str, Any] | None = None,
+        starttime: int | None = None,
     ) -> None:
         alert = evaluate_process(
             cmdline,
@@ -530,6 +559,9 @@ class Daemon:
             return
         if pid is not None:
             alert.pids = [int(pid)]
+            alert.evidence["starttime"] = starttime
+            alert.evidence["instance"] = instance_key(int(pid), starttime)
+            alert.evidence.setdefault("source", "sampler")
         if parent is not None:
             alert.parent = parent
         self.emit(alert)
@@ -547,15 +579,11 @@ class Daemon:
             evidence={"event": "IN_Q_OVERFLOW"},
         )
         self.emit(alert)
-        self._self_refresh = True
-        try:
-            refresh_watchlist(self._home)
-            if self._watch_override is None:
-                self._load_watch_paths()
-            if self._inotify is not None:
-                self._rebuild_watches()
-        finally:
-            self._self_refresh = False
+        refresh_watchlist(self._home)
+        if self._watch_override is None:
+            self._load_watch_paths()
+        if self._inotify is not None:
+            self._rebuild_watches()
 
     def handle_watch_lost(self, path: Path | None = None, mask: int = 0) -> None:
         loc = str(path) if path is not None else ""
@@ -573,15 +601,11 @@ class Daemon:
             evidence={"event": event, "path": loc},
         )
         self.emit(alert)
-        self._self_refresh = True
-        try:
-            if self._watch_override is None:
-                refresh_watchlist(self._home)
-                self._load_watch_paths()
-            if self._enable_inotify:
-                self._rebuild_watches()
-        finally:
-            self._self_refresh = False
+        if self._watch_override is None:
+            refresh_watchlist(self._home)
+            self._load_watch_paths()
+        if self._enable_inotify:
+            self._rebuild_watches()
 
     def consume_launches(self) -> None:
         path = launches_path()
@@ -623,11 +647,13 @@ class Daemon:
             pid_dirs = list(root.iterdir())
         except OSError:
             return
+        live: set[int] = set()
         for pid_dir in pid_dirs:
             name = pid_dir.name
             if not name.isdigit():
                 continue
             pid = int(name)
+            live.add(pid)
             if pid == our_pid:
                 continue
             cmdline = _read_cmdline(pid_dir)
@@ -640,7 +666,9 @@ class Daemon:
                 if names.isdisjoint(self._known):
                     continue
             cwd = _readlink(pid_dir / "cwd")
-            self.handle_process(cmdline, exe or cmdline[0], cwd, pid=pid)
+            starttime = read_starttime(pid, root)
+            self.handle_process(cmdline, exe or cmdline[0], cwd, pid=pid, starttime=starttime)
+        self._prune_seen(live)
 
     def maybe_sample(self) -> bool:
         now = self._clock()

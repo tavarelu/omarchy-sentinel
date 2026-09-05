@@ -6,8 +6,10 @@ import os
 import signal
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+
+from sentinel.procinfo import read_starttime
 
 TERM_WAIT_SEC = 3.0
 DEFAULT_PRECIOUS_WORKTREES: tuple[str, ...] = ()
@@ -109,8 +111,16 @@ def plan_kill(
     *,
     get_uid: Callable[[int], int | None] | None = None,
     uid: int | None = None,
+    expected_starttime: Mapping[int, int] | None = None,
+    get_starttime: Callable[[int], int | None] | None = None,
+    warn: Callable[[str], None] | None = None,
 ) -> list[int]:
-    """Return the PID list for a narrow kill. Refuse any live non-owned pid."""
+    """Return the PID list for a narrow kill.
+
+    Refuses any live non-owned pid. A pid whose live start time differs from
+    the one recorded at detection has been recycled by another process and is
+    dropped from the plan (treated as already exited).
+    """
     if mode not in {"child", "session"}:
         raise ValueError(f"invalid kill mode: {mode!r}")
     if mode == "child":
@@ -128,6 +138,21 @@ def plan_kill(
         ordered.append(pid)
     me = os.getuid() if uid is None else uid
     lookup = get_uid if get_uid is not None else pid_uid
+    starttime_of = get_starttime if get_starttime is not None else read_starttime
+    say = warn if warn is not None else (lambda msg: print(msg, file=sys.stderr))
+    if expected_starttime:
+        kept: list[int] = []
+        for pid in ordered:
+            want = expected_starttime.get(int(pid))
+            if want is None:
+                kept.append(pid)
+                continue
+            live = starttime_of(pid)
+            if live is not None and int(live) != int(want):
+                say(f"pid {pid} recycled since the alert (start time changed); skipping")
+                continue
+            kept.append(pid)
+        ordered = kept
     foreign: list[int] = []
     for pid in ordered:
         owner = lookup(pid)

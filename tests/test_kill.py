@@ -204,3 +204,41 @@ def test_config_template_precious_worktrees_empty():
     data = tomllib.loads((root / "packaging" / "config.toml").read_text(encoding="utf-8"))
     section = data.get("kill", data)
     assert section.get("precious_worktrees") == []
+
+
+def test_plan_kill_skips_recycled_pid():
+    warned: list[str] = []
+    plan = plan_kill(
+        alert_pids=[100, 101],
+        child_pids=[101],
+        mode="child",
+        get_uid=lambda pid: None,
+        expected_starttime={101: 500},
+        get_starttime=lambda pid: 900,
+        warn=warned.append,
+    )
+    assert plan == []
+    assert warned and "recycled" in warned[0]
+
+
+def test_plan_kill_keeps_matching_or_unknown_starttime():
+    plan = plan_kill(
+        alert_pids=[100, 101],
+        child_pids=[101],
+        mode="child",
+        get_uid=lambda pid: None,
+        expected_starttime={101: 500},
+        get_starttime=lambda pid: 500,
+        warn=lambda m: None,
+    )
+    assert plan == [101]
+    plan2 = plan_kill(
+        alert_pids=[100, 101],
+        child_pids=[101],
+        mode="child",
+        get_uid=lambda pid: None,
+        expected_starttime={101: 500},
+        get_starttime=lambda pid: None,  # process already gone
+        warn=lambda m: None,
+    )
+    assert plan2 == [101]

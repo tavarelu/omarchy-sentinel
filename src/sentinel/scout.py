@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from sentinel.fsutil import write_private_atomic
 from sentinel.paths import state_dir
 
 WATCHLIST_FILENAME = "watchlist.json"
@@ -82,8 +83,5 @@ def scout(home: Path, seeds: list[str] | None = None) -> dict[str, Any]:
 
 def write_watchlist(result: dict[str, Any]) -> Path:
     path = state_dir() / WATCHLIST_FILENAME
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2, sort_keys=True)
-        f.write("\n")
+    write_private_atomic(path, json.dumps(result, indent=2, sort_keys=True) + "\n")
     return path

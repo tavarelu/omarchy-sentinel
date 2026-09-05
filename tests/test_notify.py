@@ -81,3 +81,17 @@ def test_notify_paused_does_not_call_runner(monkeypatch):
     monkeypatch.setattr("sentinel.notify.run", lambda argv: calls.append(argv))
     send_alert(_alert())
     assert calls == []
+
+
+def test_run_swallows_timeout_and_oserror(monkeypatch):
+    import subprocess
+
+    from sentinel import notify
+
+    def boom(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="omarchy", timeout=5)
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    assert notify.run(["omarchy"]) is None
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(OSError("no")))
+    assert notify.run(["omarchy"]) is None

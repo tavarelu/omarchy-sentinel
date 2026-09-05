@@ -294,3 +294,36 @@ def test_kill_permission_error_leaves_open(monkeypatch, tmp_path):
     monkeypatch.setattr("sentinel.action.execute_kill", lambda pids, **k: None)
     assert action_main(["kill", alert.id, "--yes"]) == 1
     assert list(iter_alerts())[0].status == "open"
+
+
+def test_kill_refuses_stale_alert_without_starttime(monkeypatch, tmp_path, capsys):
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    alert = _alert()
+    alert.ts = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    append_alert(alert)
+    killed: list = []
+    monkeypatch.setattr("sentinel.action.execute_kill", lambda plan: killed.append(plan))
+    assert action_main([alert.id, "kill", "--yes"]) == 1
+    assert "start time" in capsys.readouterr().err
+    assert killed == []
+    monkeypatch.setattr("sentinel.action.plan_kill", lambda *a, **k: [101])
+    assert action_main([alert.id, "kill", "--yes", "--force-stale"]) == 0
+    assert killed == [[101]]
+
+
+def test_kill_passes_recorded_starttime(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    alert = _alert(pids=[101], evidence={"flag": "--yolo", "flags": ["--yolo"], "starttime": 500, "instance": "101:500"})
+    append_alert(alert)
+    seen: dict = {}
+
+    def fake_plan(pids, child_pids=None, mode="child", **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr("sentinel.action.plan_kill", fake_plan)
+    monkeypatch.setattr("sentinel.action.execute_kill", lambda plan: None)
+    assert action_main([alert.id, "kill", "--yes"]) == 0
+    assert seen["expected_starttime"] == {101: 500}
