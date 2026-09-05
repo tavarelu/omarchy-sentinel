@@ -1,4 +1,5 @@
 .pragma library
+// SPDX-License-Identifier: Apache-2.0
 
 // Pure helpers for the Sentinel bar widget and panel. No I/O here: the QML
 // side reads files and runs commands; this file only turns text into rows.

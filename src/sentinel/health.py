@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Track A health checks with sticky failure notifications."""
 
 from __future__ import annotations

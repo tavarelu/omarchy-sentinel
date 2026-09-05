@@ -1,0 +1,16 @@
+Omarchy Sentinel
+Copyright 2026 Luis Tav
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+Third-party components and attributions
+
+- NVIDIA SkillSpector (Apache License 2.0, https://github.com/NVIDIA/skillspector)
+  is invoked as a separate, user-installed tool for scanning agent skills and
+  plugins. It is not bundled with or modified by this project.
+- The bar-widget and panel conventions, the meter and dial idioms, and the
+  notification and menu integration follow the first-party plugins shipped
+  with Omarchy (MIT License, https://omarchy.org). They are re-implemented
+  here, not copied.
+- The Nerd Fonts glyphs used in the bar and panel are provided by the Omarchy
+  desktop's installed fonts.

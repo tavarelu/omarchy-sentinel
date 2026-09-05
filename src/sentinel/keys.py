@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Shared keying for approvals: one definition of where an alert happened and what it carried.
 
 Invariant: the CLI (approve) and the daemon (suppress) must derive identical
