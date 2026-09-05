@@ -22,6 +22,7 @@ Updated by Chief only. Grok reads it; Grok never edits it.
 | W3-04 | Wire R-CHILD-SHELL | written, waits for W3-02 | | | |
 | W3-05 | Vendor bypass table, install truth, click path | written | | | |
 | W3-06 | Docs truth (Chief) | in progress | | | |
+| W3-07 | Self-defense: tamper evidence (security review S1) | written | | | |
 | W5-03 | Omarchy plugin (pulled forward) | scaffold live-smoked 2026-09-05: bar count, panel, cards, Dismiss round trip; three bugs fixed; shell restart required after QML edits | feature | | Owner saw screenshots |
 
 States: written, running, reported, returned, accepted, escalated.
@@ -33,6 +34,10 @@ States: written, running, reported, returned, accepted, escalated.
 | D-001 | Un-ignore `.superpowers/sdd` and commit the wave 1 and 2 review trail? It contains internal review diffs and briefs that would become public in an open-source repo. |
 | D-002 | Public name (Sentinel collides with SentinelOne, Azure Sentinel, and others). |
 | D-003 | License (recommend Apache-2.0 or MIT; Apache-2.0 carries an explicit patent grant). |
+| D-004 | One repo as both Omarchy plugin and daemon package (scaffold assumes yes). |
+| D-005 | May Sentinel parse agent settings bodies to distinguish a benign save from a hook change? Spec currently forbids. |
+| D-006 | SkillSpector OSV lookups on by default (sends package name and version only)? |
+| D-007 | SkillSpector pinning and update policy. |
 
 ## Grok usage log
 

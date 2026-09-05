@@ -41,6 +41,9 @@ SENTINEL_BIN_DIR=/tmp/sb PATH=/tmp/fakemise:/tmp/sb:$PATH bash scripts/install-w
 - For claim 3 run `bash -lc 'echo $PATH; command -v claude'`.
 
 ## Non-goals
+**Added by security review 2026-09-05 (S4):** the vendor table lists secret-bearing flags per vendor; `record_launch` and `evaluate_process` replace the value of any flag matching `(api[-_]?key|token|secret|password|auth)` and any bare token matching a bearer or key pattern with `<redacted>` before storing, and set `evidence.redacted = true`. Test with a synthetic `--api-key sk-test` argv.
+
+
 - Menu `provider` rows and the bar widget (W5-03).
 - Installing anything on the live machine. The installers are changed, not run.
 

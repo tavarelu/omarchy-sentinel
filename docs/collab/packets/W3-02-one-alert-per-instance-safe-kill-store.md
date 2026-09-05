@@ -56,6 +56,9 @@ grep -c "_self_refresh" src/sentinel/daemon.py   # expected: 0
 - Verify field 22 of `/proc/self/stat` is starttime on this kernel (`man 5 proc`), and that it is stable across the process lifetime.
 
 ## Non-goals
+**Added by security review 2026-09-05 (S3, S7, S8):** create `state_dir()` and `config_dir()` with mode 0700 and write every state file with 0600 (`os.open` + `O_CREAT`, mode 0o600); `notify.run` gets `timeout=5` and swallows `TimeoutExpired` with a journal line; the alert-log rewrite uses a temp file plus `os.replace` under `fcntl.flock`, with rotation at 5 MB. Tests for each.
+
+
 - R-CHILD-SHELL wiring (W3-04 uses this registry).
 - Allowlist keying (W3-01).
 

@@ -18,6 +18,7 @@ The project exists to protect people and their hardware from AI coding agents th
 | W3-04 | Wire R-CHILD-SHELL into the sampler | after W3-02 |
 | W3-05 | Vendor bypass table, install truth, a real click path | yes |
 | W3-06 | Docs truth: ledger, status, review trail (Chief-owned) | yes |
+| W3-07 | Self-defense: journal mirror, foreign-write tripwire, pause cap (security review S1) | after W3-02 |
 
 Exit: all merged, G0 and G1 green, watch roots on the Chief's machine under 20, a simulated plugin-marketplace refresh produces zero alerts, one bypass session produces exactly one toast.
 
@@ -43,7 +44,7 @@ Exit: `pip install` and the AUR package both work on a clean Omarchy VM; docs re
 
 ## Wave 6: extend it
 
-- W6-01 Gate: run SkillSpector on new skill or plugin directories the moment they appear and surface the verdict in the same notification.
+- W6-01 Gate: run NVIDIA SkillSpector on new skill, plugin and MCP roots the moment they appear and surface the verdict in the same notification. Detailed plan: `docs/collab/plans/SKILLSPECTOR-INTEGRATION.md` (packets W6-01a to W6-01e).
 - W6-02 Loop detection: process spawns and shell children per agent per minute versus that session's own baseline.
 - W6-03 Content-hash diff for hooks and settings so the alert says which file changed and only fires on real change.
 - W6-04 Writer attribution prototype with unprivileged fanotify on Linux 5.13+, behind a flag, with a measured false-positive comparison against inotify.

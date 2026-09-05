@@ -45,6 +45,9 @@ PY
 - Verify each vendor's real config filenames against the installed CLIs' documentation or `--help` where available (`claude`, `codex`, `gemini`, `grok` are installed via mise). Mark any filename you could not verify as UNVERIFIED in the vendor table comments.
 
 ## Non-goals
+**Added by security review 2026-09-05 (S5):** auto-watch new directories only under hooks roots; track auto-added watch descriptors and drop them silently when they vanish; raise the lost-watch alert only for a configured root; rate-limit `refresh_watchlist` to once per 60 s. Regression test: create and remove `history.jsonl.lock` under a watched dir 20 times → zero alerts, one refresh at most.
+
+
 - Content hashing and diffing (W6-03).
 - The bypass-flag half of `vendors.py` (W3-05).
 
