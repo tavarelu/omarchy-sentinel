@@ -164,7 +164,7 @@ Panel {
     owner: root.barIdentity
     bar: root.bar
     open: root.opened
-    centerOnBar: true
+    // Anchored to the widget, not centered on the bar: this lives in the right section.
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(540))
     contentHeight: panel.fittedContentHeight(column.implicitHeight)
