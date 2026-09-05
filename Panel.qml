@@ -6,13 +6,15 @@ import qs.Commons
 import qs.Ui
 import "SentinelModel.js" as Model
 
-// The Sentinel popup: the daemon's health on top, then one card per open
-// alert with the four responses the spec locks: Approve, Kill, Investigate,
-// Dismiss. Approve and Dismiss run the CLI directly; Kill and Investigate
-// open a floating terminal because one needs a confirm and the other a pager.
+// The Sentinel popup, version 2.
 //
-// BarWidget.qml owns the alert file watchers and the CLI; this panel only
-// draws its rows and asks it to act.
+// Top to bottom: the daemon's state, a three-chip severity filter that the
+// daemon shares through notify-prefs.json, then one card per open alert with
+// a severity stripe, a folder button, an optional risk meter, and the same
+// action set the CLI offers. Approve and Dismiss run the CLI directly; Kill
+// and Investigate open a floating terminal because one needs a confirm and the
+// other a pager. BarWidget.qml owns the file watchers and the CLI; this panel
+// only draws and asks.
 Panel {
   id: root
   moduleName: "tav.sentinel"
@@ -28,14 +30,17 @@ Panel {
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property color hoverFill: bar ? Style.hoverFillFor(bar.foreground, Color.accent) : "transparent"
   readonly property color selectedFill: bar ? Style.selectedFillFor(bar.foreground, Color.accent) : "transparent"
+  readonly property color track: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.12)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   readonly property var rows: hostWidget && hostWidget.openRows ? hostWidget.openRows : []
+  readonly property var prefs: hostWidget && hostWidget.prefs ? hostWidget.prefs : Model.defaultPrefs()
+  readonly property int hiddenCount: hostWidget ? hostWidget.hiddenCount : 0
+  readonly property var burst: hostWidget ? hostWidget.burst : null
   readonly property bool paused: hostWidget ? hostWidget.paused === true : false
+  readonly property string stateDir: hostWidget ? hostWidget.stateDir : ""
   readonly property string pluginDir: String(Qt.resolvedUrl(".")).replace(/^file:\/\//, "").replace(/\/$/, "")
 
-  // active | inactive | failed | unknown, from systemctl; unitInstalled says
-  // whether the unit file exists at all, so the panel can offer Install.
   property string daemonState: "unknown"
   property bool unitInstalled: false
   property double nowMs: Date.now()
@@ -45,16 +50,18 @@ Panel {
   readonly property string daemonLine: !unitInstalled
     ? "Daemon not installed"
     : (daemonState === "active" ? "Daemon running" : "Daemon " + daemonState)
-  readonly property string countLine: paused
-    ? "Notifications paused"
-    : (rows.length === 0 ? "No open alerts" : rows.length + " open alert" + (rows.length === 1 ? "" : "s"))
+  readonly property string countLine: {
+    var base = paused
+      ? "Notifications paused"
+      : (rows.length === 0 ? "No open alerts" : rows.length + " open alert" + (rows.length === 1 ? "" : "s"))
+    if (burst && burst.active) base += " · burst: " + burst.total + " collapsed"
+    return base
+  }
 
   function refresh() {
     nowMs = Date.now()
     statusProcess.running = true
     unitProcess.running = true
-    // reloadFiles, not refresh: the widget's refresh() calls back into this
-    // function and the pair would recurse until the stack overflowed.
     if (hostWidget && typeof hostWidget.reloadFiles === "function") hostWidget.reloadFiles()
   }
 
@@ -89,7 +96,6 @@ Panel {
     var args = [String(alert.id), verb]
     if (extra) for (var i = 0; i < extra.length; i++) args.push(extra[i])
     hostWidget.run(args)
-    // The daemon-side rewrite lands within milliseconds; give the watcher a beat.
     refreshLater.restart()
   }
 
@@ -104,7 +110,15 @@ Panel {
   function dismiss(alert) { act(alert, "dismiss") }
   function kill(alert) { actInTerminal(alert, "kill") }
   function investigate(alert) { actInTerminal(alert, "investigate") }
+  function openLocation(alert) { if (hostWidget) hostWidget.openLocation(alert) }
+  function openLogs() { if (hostWidget) hostWidget.openLogs() }
   function pauseOneHour() { if (hostWidget) hostWidget.pauseOneHour(); refreshLater.restart() }
+  function toggleSeverity(sev) {
+    if (!hostWidget) return
+    hostWidget.setSeverity(sev, prefs[sev] === false)
+    refreshLater.restart()
+  }
+  function showAll() { if (hostWidget) hostWidget.showAll(); refreshLater.restart() }
 
   function installDaemon() {
     Quickshell.execDetached(["omarchy-launch-floating-terminal-with-presentation", pluginDir + "/scripts/install-daemon.sh", "--apply"])
@@ -159,13 +173,66 @@ Panel {
     }
   }
 
+  // Track-and-fill meter for a SkillSpector score. The API is frozen (value
+  // 0..1 or -1 to hide, verdict text); the visual is decided on the design
+  // canvas (UX-04) and may become a ring drawn with Shape + PathAngleArc.
+  component RiskMeter: Item {
+    id: meter
+    property real value: -1
+    property string verdict: ""
+    readonly property bool alarming: value >= 0.5
+    visible: value >= 0
+    implicitHeight: visible ? Style.space(14) : 0
+
+    Rectangle {
+      id: meterTrack
+      anchors.left: parent.left
+      anchors.right: verdictLabel.left
+      anchors.rightMargin: Style.spacing.md
+      anchors.verticalCenter: parent.verticalCenter
+      height: Math.max(Style.space(4), Math.round(Style.spacing.controlHeight * 0.14))
+      radius: height / 2
+      color: root.track
+    }
+
+    Rectangle {
+      anchors.left: meterTrack.left
+      anchors.verticalCenter: meterTrack.verticalCenter
+      height: meterTrack.height
+      radius: meterTrack.radius
+      width: meterTrack.width * Math.max(0, Math.min(1, meter.value))
+      color: meter.alarming ? root.urgent : root.foreground
+      Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+    }
+
+    Text {
+      id: verdictLabel
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      text: meter.verdict !== "" ? Math.round(meter.value * 100) + " · " + meter.verdict : Math.round(meter.value * 100)
+      color: meter.alarming ? root.urgent : root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+  }
+
+  Component {
+    id: logsButton
+    PanelActionButton {
+      iconText: "󰈙"
+      tooltipText: "Open the log folder"
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onClicked: root.openLogs()
+    }
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
     owner: root.barIdentity
     bar: root.bar
     open: root.opened
-    // Anchored to the widget, not centered on the bar: this lives in the right section.
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(540))
     contentHeight: panel.fittedContentHeight(column.implicitHeight)
@@ -186,6 +253,10 @@ Panel {
         else if (t === "x") root.kill(root.selected())
         else if (t === "i") root.investigate(root.selected())
         else if (t === "d") root.dismiss(root.selected())
+        else if (t === "o") root.openLocation(root.selected())
+        else if (t === "1") root.toggleSeverity("high")
+        else if (t === "2") root.toggleSeverity("medium")
+        else if (t === "3") root.toggleSeverity("low")
         else if (t === "p") root.pauseOneHour()
         else if (t === "r") root.refresh()
       }
@@ -203,6 +274,7 @@ Panel {
         detail: root.countLine
         foreground: root.foreground
         fontFamily: root.fontFamily
+        trailingControl: logsButton
       }
 
       // Daemon controls: only the one that applies is shown.
@@ -245,8 +317,64 @@ Panel {
         foreground: root.foreground
       }
 
+      // ---- Severity filter. Shared with the daemon: off hides the alerts
+      //      here and stops their toasts. Tamper alerts ignore it.
+      Column {
+        width: parent.width
+        spacing: Style.spacing.sm
+
+        Text {
+          text: "SHOW AND TOAST"
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          font.letterSpacing: 1
+        }
+
+        Row {
+          id: filterRow
+          width: parent.width
+          spacing: Style.spacing.md
+          readonly property real cellWidth: (width - spacing * 2) / 3
+
+          Repeater {
+            model: ["high", "medium", "low"]
+
+            Button {
+              required property string modelData
+              required property int index
+              width: filterRow.cellWidth
+              text: modelData.charAt(0).toUpperCase() + modelData.slice(1)
+              iconText: root.prefs[modelData] === false ? "󰄱" : "󰄵"
+              tooltipText: String(index + 1)
+              bordered: true
+              selected: root.prefs[modelData] !== false
+              foreground: modelData === "high" ? root.urgent : root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.bodySmall
+              onClicked: root.toggleSeverity(modelData)
+            }
+          }
+        }
+
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          text: "Off hides those alerts here and stops their toasts. Tamper alerts always show."
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+
+      PanelSeparator {
+        width: parent.width
+        foreground: root.foreground
+      }
+
+      // ---- Empty states.
       Text {
-        visible: root.rows.length === 0
+        visible: root.rows.length === 0 && root.hiddenCount === 0
         width: parent.width
         text: root.paused ? "Paused. Logging continues; toasts resume when the pause ends." : "Nothing changed the shape of a session. Normal coding stays silent."
         wrapMode: Text.WordWrap
@@ -255,6 +383,29 @@ Panel {
         font.pixelSize: Style.font.body
       }
 
+      Row {
+        visible: root.rows.length === 0 && root.hiddenCount > 0
+        width: parent.width
+        spacing: Style.spacing.md
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: root.hiddenCount + " alert" + (root.hiddenCount === 1 ? "" : "s") + " hidden by the filter."
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+        }
+
+        Button {
+          text: "Show all"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          fontSize: Style.font.bodySmall
+          onClicked: root.showAll()
+        }
+      }
+
+      // ---- Alert cards.
       Repeater {
         model: root.rows
 
@@ -263,7 +414,12 @@ Panel {
           required property var modelData
           required property int index
           readonly property bool isSelected: root.cursorActive && root.cursor === index
-          readonly property bool isHigh: String(modelData.severity || "") === "high"
+          readonly property string sev: String(modelData.severity || "")
+          readonly property bool isHigh: sev === "high"
+          readonly property bool sticky: Model.isSticky(modelData)
+          readonly property bool hasPids: modelData.pids && modelData.pids.length > 0
+          readonly property bool canOpen: Model.openArgv(modelData) !== null
+          readonly property real riskValue: Model.riskValue(modelData)
 
           width: column.width
           implicitHeight: cardColumn.implicitHeight + Style.spacing.lg * 2
@@ -272,14 +428,26 @@ Panel {
 
           HoverHandler { id: cardHover }
 
+          // Severity stripe: urgent for high, fading for medium and low.
+          Rectangle {
+            x: 0
+            y: Style.spacing.lg
+            width: Style.space(3)
+            height: parent.height - Style.spacing.lg * 2
+            radius: width / 2
+            color: card.isHigh || card.sticky ? root.urgent : root.foreground
+            opacity: card.isHigh || card.sticky ? 1 : (card.sev === "medium" ? 0.55 : 0.25)
+          }
+
           Column {
             id: cardColumn
-            x: Style.spacing.lg
+            x: Style.spacing.lg + Style.space(6)
             y: Style.spacing.lg
-            width: parent.width - Style.spacing.lg * 2
+            width: parent.width - Style.spacing.lg * 2 - Style.space(6)
             spacing: Style.spacing.sm
 
             Row {
+              id: headRow
               width: parent.width
               spacing: Style.spacing.md
 
@@ -289,11 +457,11 @@ Panel {
                 text: Model.ruleGlyph(card.modelData)
                 fontFamily: root.fontFamily
                 fontSize: Style.font.icon
-                color: card.isHigh ? root.urgent : root.foreground
+                color: card.isHigh || card.sticky ? root.urgent : root.foreground
               }
 
               Text {
-                width: parent.width - Style.space(18) - timeLabel.implicitWidth - Style.spacing.md * 2
+                width: parent.width - Style.space(18) - timeLabel.implicitWidth - openButton.width - Style.spacing.md * 3
                 text: String(card.modelData.summary || card.modelData.rule || "")
                 elide: Text.ElideRight
                 color: root.foreground
@@ -304,64 +472,98 @@ Panel {
 
               Text {
                 id: timeLabel
+                anchors.verticalCenter: parent.verticalCenter
                 text: Model.relativeTime(card.modelData.ts, root.nowMs)
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
               }
+
+              PanelActionButton {
+                id: openButton
+                anchors.verticalCenter: parent.verticalCenter
+                visible: card.canOpen
+                iconText: "󰉋"
+                tooltipText: "o: open folder"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.openLocation(card.modelData)
+              }
             }
 
             Text {
               width: parent.width
-              text: String(card.modelData.rule || "") + "  ·  " + String(card.modelData.severity || "") + (Model.whereLabel(card.modelData) !== "" ? "  ·  " + Model.whereLabel(card.modelData) : "")
+              text: Model.severityLabel(card.modelData) + "  ·  " + String(card.modelData.rule || "") + (Model.whereLabel(card.modelData) !== "" ? "  ·  " + Model.whereLabel(card.modelData) : "") + (card.sticky ? "  ·  tamper" : "")
               elide: Text.ElideRight
-              color: root.dim
+              color: card.isHigh || card.sticky ? root.urgent : root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
+              font.letterSpacing: 0.5
             }
 
+            RiskMeter {
+              width: parent.width
+              value: card.riskValue
+              verdict: Model.riskVerdict(card.modelData)
+            }
+
+            // Equal-width action cells so the row never leaves the card.
             Row {
+              id: actionRow
+              width: parent.width
               spacing: Style.spacing.sm
+              readonly property int count: 4 + (card.hasPids ? 1 : 0)
+              readonly property real cellWidth: (width - spacing * (count - 1)) / count
 
               Button {
-                text: Model.isWriteRule(card.modelData) ? "Approve file" : "Approve repo"
-                tooltipText: "a"
+                width: actionRow.cellWidth
+                text: "Approve"
+                tooltipText: Model.isWriteRule(card.modelData) ? "a: allow writes to this file" : "a: allow this pattern in this repository"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 fontSize: Style.font.bodySmall
+                horizontalPadding: Style.spacing.sm
                 onClicked: root.approveHere(card.modelData)
               }
               Button {
+                width: actionRow.cellWidth
                 text: "Anywhere"
-                tooltipText: "A: approve forever"
+                tooltipText: Model.isWriteRule(card.modelData) ? "A: allow this file, never expires" : "A: allow this pattern everywhere, never expires"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 fontSize: Style.font.bodySmall
+                horizontalPadding: Style.spacing.sm
                 onClicked: root.approveAnywhere(card.modelData)
               }
               Button {
-                visible: card.modelData.pids && card.modelData.pids.length > 0
+                visible: card.hasPids
+                width: actionRow.cellWidth
                 text: "Kill"
                 tooltipText: "x: confirm in a terminal"
                 foreground: root.urgent
                 fontFamily: root.fontFamily
                 fontSize: Style.font.bodySmall
+                horizontalPadding: Style.spacing.sm
                 onClicked: root.kill(card.modelData)
               }
               Button {
+                width: actionRow.cellWidth
                 text: "Investigate"
-                tooltipText: "i or Enter"
+                tooltipText: "i or Enter: evidence with citations"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 fontSize: Style.font.bodySmall
+                horizontalPadding: Style.spacing.sm
                 onClicked: root.investigate(card.modelData)
               }
               Button {
+                width: actionRow.cellWidth
                 text: "Dismiss"
-                tooltipText: "d"
+                tooltipText: "d: close without allowlisting"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 fontSize: Style.font.bodySmall
+                horizontalPadding: Style.spacing.sm
                 onClicked: root.dismiss(card.modelData)
               }
             }
@@ -374,30 +576,46 @@ Panel {
         foreground: root.foreground
       }
 
-      Row {
+      // ---- Footer: controls on one row, the key legend wrapped beneath so
+      //      it can never run past the popup edge.
+      Column {
         width: parent.width
-        spacing: Style.spacing.md
+        spacing: Style.spacing.sm
 
-        Button {
-          text: root.paused ? "Paused" : "Pause 1h"
-          iconText: "󰏤"
-          enabled: !root.paused
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          fontSize: Style.font.bodySmall
-          onClicked: root.pauseOneHour()
+        Row {
+          spacing: Style.spacing.md
+
+          Button {
+            text: root.paused ? "Paused" : "Pause 1h"
+            iconText: "󰏤"
+            enabled: !root.paused
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            fontSize: Style.font.bodySmall
+            onClicked: root.pauseOneHour()
+          }
+          Button {
+            text: "Refresh"
+            iconText: "󰑐"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            fontSize: Style.font.bodySmall
+            onClicked: root.refresh()
+          }
+          Button {
+            text: "Logs"
+            iconText: "󰈙"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            fontSize: Style.font.bodySmall
+            onClicked: root.openLogs()
+          }
         }
-        Button {
-          text: "Refresh"
-          iconText: "󰑐"
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          fontSize: Style.font.bodySmall
-          onClicked: root.refresh()
-        }
+
         Text {
-          anchors.verticalCenter: parent.verticalCenter
-          text: "j k move · a approve · x kill · i investigate · d dismiss · p pause"
+          width: parent.width
+          wrapMode: Text.WordWrap
+          text: "j k move · a approve · A anywhere · x kill · i investigate · d dismiss · o open · 1 2 3 filter · p pause · r refresh"
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption

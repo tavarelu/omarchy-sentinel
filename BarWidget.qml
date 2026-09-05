@@ -20,10 +20,12 @@ BarWidget {
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || home + "/.local/state") + "/sentinel"
   readonly property string cliPath: String(setting("cliPath", "") || "")
-  readonly property bool showLow: setting("showLowSeverity", false) === true
 
   property var allRows: []
-  readonly property var openRows: Model.openAlerts(allRows, showLow)
+  property var prefs: Model.defaultPrefs()
+  property var burst: null
+  readonly property var openRows: Model.openAlerts(allRows, prefs)
+  readonly property int hiddenCount: Model.hiddenCount(allRows, prefs)
   readonly property var counts: Model.countBySeverity(openRows)
   readonly property int openCount: openRows.length
   property double pauseUntilMs: 0
@@ -49,11 +51,27 @@ BarWidget {
 
   function pauseOneHour() { run(["pause", "1h"]) }
 
+  // The filter is shared with the daemon through notify-prefs.json, which only
+  // the CLI writes; the panel asks and then watches the file come back.
+  function setSeverity(sev, on) { run(["notify", "--severity", sev + "=" + (on ? "on" : "off")]) }
+  function showAll() { run(["notify", "--severity", "high=on", "--severity", "medium=on", "--severity", "low=on"]) }
+
+  function openLocation(alert) {
+    var argv = Model.openArgv(alert)
+    if (argv) Quickshell.execDetached(argv)
+  }
+
+  function openLogs() {
+    Quickshell.execDetached(["uwsm-app", "--", "nautilus", "--new-window", stateDir])
+  }
+
   // Re-read the state files only. The panel calls this; it never calls
   // refresh(), which would recurse back into the panel.
   function reloadFiles() {
     alertsFile.reload()
     pauseFile.reload()
+    prefsFile.reload()
+    burstFile.reload()
   }
 
   function refresh() {
@@ -128,6 +146,42 @@ BarWidget {
     onTriggered: pauseFile.reload()
   }
 
+  FileView {
+    id: prefsFile
+    path: root.stateDir + "/notify-prefs.json"
+    watchChanges: true
+    printErrors: false
+    property bool missing: false
+    onFileChanged: if (!missing) prefsReload.restart()
+    onLoaded: { missing = false; root.prefs = Model.parsePrefs(text()) }
+    onLoadFailed: { missing = true; root.prefs = Model.defaultPrefs() }
+  }
+
+  Timer {
+    id: prefsReload
+    interval: 150
+    repeat: false
+    onTriggered: prefsFile.reload()
+  }
+
+  FileView {
+    id: burstFile
+    path: root.stateDir + "/notify-burst.json"
+    watchChanges: true
+    printErrors: false
+    property bool missing: false
+    onFileChanged: if (!missing) burstReload.restart()
+    onLoaded: { missing = false; root.burst = Model.parseBurst(text()) }
+    onLoadFailed: { missing = true; root.burst = null }
+  }
+
+  Timer {
+    id: burstReload
+    interval: 150
+    repeat: false
+    onTriggered: burstFile.reload()
+  }
+
   // The state directory may not exist until the daemon first runs; a file
   // watch on a missing directory never fires, so rescan occasionally.
   Timer {
@@ -158,6 +212,7 @@ BarWidget {
     function hide(): void { root.close() }
     function toggle(): void { root.togglePanel() }
     function pause(): void { root.pauseOneHour() }
+    function logs(): void { root.openLogs() }
   }
 
   WidgetButton {

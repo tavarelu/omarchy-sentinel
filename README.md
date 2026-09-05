@@ -37,13 +37,15 @@ The wrapper installer backs up anything it replaces and refuses to finish if its
 
 - The bar shows a shield and the number of open alerts. It turns urgent when a high-severity alert is open, and dims while notifications are paused.
 - Left click opens the panel. Middle click pauses notifications for an hour. Right click lists alerts in a terminal.
-- In the panel: **Approve repo** allows this pattern in the current repository, **Anywhere** allows it everywhere, **Kill** opens a terminal that confirms before signalling the child process, **Investigate** opens the local detail view, **Dismiss** closes the alert without allowlisting. Keys: `j` `k` move, `a` `A` approve, `x` kill, `i` investigate, `d` dismiss, `p` pause.
+- In the panel: **Approve** allows this pattern in the current repository, or writes to this file for write alerts; **Anywhere** allows it everywhere and never expires; **Kill** opens a terminal that confirms before signalling the child process; **Investigate** opens the evidence view; **Dismiss** closes the alert without allowlisting. The folder icon on a card opens the alerted path in the file manager; the folder icon in the header opens the log directory.
+- **High / Medium / Low** chips filter the list and decide which severities toast. The setting is shared with the daemon through `sentinel-action notify` and persists. Tamper alerts always show.
+- Keys: `j` `k` move, `a` `A` approve, `x` kill, `i` investigate, `d` dismiss, `o` open folder, `1` `2` `3` toggle severities, `p` pause, `r` refresh.
 - Notifications carry the same actions: click one to open the alert in a floating terminal.
 - Command line: `sentinel-action list`, `sentinel-action <id> approve --scope session|24h|this-repo|forever`, `sentinel-action <id> kill [--session]`, `sentinel-action <id> investigate`, `sentinel-action <id> dismiss`, `sentinel-action pause 1h`, `sentinel-scout --refresh`.
 
 ## Configure
 
-- Plugin settings live in the bar's widget settings: the path to `sentinel-action` if it is not on PATH, and whether low-severity alerts show.
+- Plugin settings live in the bar's widget settings: the path to `sentinel-action` if it is not on PATH. Which severities show and toast is set from the panel chips or `sentinel-action notify --severity low=on`.
 - Daemon settings live in `~/.config/sentinel/config.toml`: sampler interval, extra bypass flags, known agent names, and `precious_worktrees`, the directories where killing a whole agent session requires a second confirmation.
 - Move the widget: `omarchy bar move tav.sentinel --section right`.
 

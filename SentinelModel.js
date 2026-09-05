@@ -20,17 +20,120 @@ function parseAlerts(text) {
   return rows
 }
 
-function openAlerts(rows, showLow) {
+var STICKY_EVENTS = { "foreign-write": true, "alert-log-truncated": true }
+
+function defaultPrefs() {
+  return { high: true, medium: true, low: false }
+}
+
+// notify-prefs.json is written by `sentinel-action notify`; only the three
+// severity flags are honored here, anything else in the file is ignored.
+function parsePrefs(text) {
+  var prefs = defaultPrefs()
+  try {
+    var d = JSON.parse(String(text || ""))
+    var sev = d && d.severities ? d.severities : {}
+    for (var k in prefs) if (typeof sev[k] === "boolean") prefs[k] = sev[k]
+  } catch (e) {
+    // Missing or corrupt: defaults stand, same as the daemon.
+  }
+  return prefs
+}
+
+function parseBurst(text) {
+  try {
+    var d = JSON.parse(String(text || ""))
+    if (!d || typeof d !== "object") return null
+    var total = 0
+    var by = d.by_severity || {}
+    for (var k in by) total += Number(by[k]) || 0
+    return { active: d.active === true, total: total, by: by }
+  } catch (e) {
+    return null
+  }
+}
+
+// Tamper alerts are always listed and always toast, whatever the filter says.
+function isSticky(a) {
+  return a && a.rule === "R-SELF" && a.evidence && STICKY_EVENTS[String(a.evidence.event || "")] === true
+}
+
+function severityOn(a, prefs) {
+  if (isSticky(a)) return true
+  var s = String(a.severity || "")
+  if (s === "high" || s === "medium" || s === "low") return prefs[s] !== false
+  return true
+}
+
+function openAlerts(rows, prefs) {
+  var p = prefs || defaultPrefs()
   var out = []
   for (var i = 0; i < rows.length; i++) {
     var a = rows[i]
     if (a.status !== "open") continue
-    if (!showLow && String(a.severity || "") === "low") continue
+    if (!severityOn(a, p)) continue
     out.push(a)
   }
   // Newest first: the daemon appends in time order.
   out.reverse()
   return out
+}
+
+function hiddenCount(rows, prefs) {
+  var p = prefs || defaultPrefs()
+  var n = 0
+  for (var i = 0; i < rows.length; i++) {
+    var a = rows[i]
+    if (a.status === "open" && !severityOn(a, p)) n++
+  }
+  return n
+}
+
+function severityRank(a) {
+  switch (String(a.severity || "")) {
+    case "high": return 0
+    case "medium": return 1
+    case "low": return 2
+    default: return 1
+  }
+}
+
+function severityLabel(a) {
+  switch (String(a.severity || "")) {
+    case "high": return "HIGH"
+    case "medium": return "MED"
+    case "low": return "LOW"
+    default: return String(a.severity || "").toUpperCase()
+  }
+}
+
+// SkillSpector result, when a scan is attached: 0..1 or -1 for none.
+function riskValue(a) {
+  var scan = a && a.evidence ? a.evidence.scan : null
+  if (!scan || typeof scan.risk_score !== "number") return -1
+  return Math.max(0, Math.min(1, scan.risk_score / 100))
+}
+
+function riskVerdict(a) {
+  var scan = a && a.evidence ? a.evidence.scan : null
+  return scan && scan.verdict ? String(scan.verdict) : ""
+}
+
+function fileUri(path) {
+  var parts = String(path || "").split("/")
+  var out = []
+  for (var i = 0; i < parts.length; i++) out.push(encodeURIComponent(parts[i]))
+  return "file://" + out.join("/")
+}
+
+// argv to reveal the alert's file or open its directory; null when it has neither.
+function openArgv(a) {
+  if (!a) return null
+  if (a.paths && a.paths.length > 0 && String(a.paths[0]).charAt(0) === "/")
+    return ["uwsm-app", "--", "nautilus", "--select", fileUri(a.paths[0])]
+  if (a.cwd && String(a.cwd).charAt(0) === "/")
+    return ["uwsm-app", "--", "nautilus", "--new-window", String(a.cwd)]
+  return null
 }
 
 function countBySeverity(rows) {
