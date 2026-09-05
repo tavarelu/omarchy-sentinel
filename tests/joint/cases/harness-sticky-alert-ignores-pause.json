@@ -1,0 +1,22 @@
+{
+  "id": "harness-sticky-alert-ignores-pause",
+  "title": "A self-tamper alert is delivered sticky even while notifications are paused",
+  "author": "claude",
+  "why": "Harness self-proof for the invariant that matters most: an agent can run `sentinel-action pause`, so the one alert class about Sentinel itself must ignore pause and carry no timeout.",
+  "requires": ["ux-01"],
+  "state": {"pause_until": "2099-01-01T00:00:00+00:00\n"},
+  "action": {
+    "type": "notify",
+    "alerts": [
+      {"severity": "high", "rule": "R-SELF", "summary": "sentinel state written by an unknown process", "paths": ["/home/u/.local/state/sentinel/alerts.jsonl"], "evidence": {"event": "foreign-write", "path": "/home/u/.local/state/sentinel/alerts.jsonl"}},
+      {"severity": "high", "summary": "an ordinary high alert while paused"}
+    ]
+  },
+  "expect": {
+    "no_exception": true,
+    "toasts": 1,
+    "summaries": 0,
+    "urgencies": ["critical"],
+    "timeouts": []
+  }
+}

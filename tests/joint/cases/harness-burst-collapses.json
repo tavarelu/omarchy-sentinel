@@ -1,0 +1,30 @@
+{
+  "id": "harness-burst-collapses",
+  "title": "Seven high alerts produce five toasts and then one summary that is rewritten in place",
+  "author": "claude",
+  "why": "Harness self-proof: this is the behaviour UX-01 was live-checked against, so it anchors the vocabulary the red-team cases use.",
+  "requires": ["ux-01"],
+  "action": {
+    "type": "notify",
+    "interval_sec": 1,
+    "alerts": [
+      {"severity": "high", "summary": "agent 1 started with --yolo"},
+      {"severity": "high", "summary": "agent 2 started with --yolo"},
+      {"severity": "high", "summary": "agent 3 started with --yolo"},
+      {"severity": "high", "summary": "agent 4 started with --yolo"},
+      {"severity": "high", "summary": "agent 5 started with --yolo"},
+      {"severity": "high", "summary": "agent 6 started with --yolo"},
+      {"severity": "high", "summary": "agent 7 started with --yolo"}
+    ]
+  },
+  "expect": {
+    "no_exception": true,
+    "toasts": 5,
+    "summaries": 2,
+    "urgencies": ["normal"],
+    "timeouts": ["30000"],
+    "body_contains": ["Sentinel: 7 alerts", "7 high"],
+    "state_json_keys": {"notify-burst.json": ["version", "events", "by_severity", "summary_id"]},
+    "state_modes": {"notify-burst.json": "600"}
+  }
+}

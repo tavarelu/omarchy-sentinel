@@ -1,0 +1,21 @@
+{
+  "id": "harness-tampered-prefs-ignores-junk",
+  "title": "A prefs file with non-boolean and unknown keys is ignored key by key, never crashing and never changing urgency",
+  "author": "claude",
+  "why": "Harness self-proof for the state-tampering shape: anything that can write the state dir can put junk in prefs, and the daemon must keep toasting the severities the config enabled.",
+  "requires": ["ux-01"],
+  "state": {"notify-prefs.json": "{\"version\": 1, \"severities\": {\"high\": \"yes\", \"bogus\": true, \"medium\": 0}, \"urgency\": \"critical\"}"},
+  "action": {
+    "type": "notify",
+    "alerts": [{"severity": "high", "summary": "agent started with --yolo"}]
+  },
+  "expect": {
+    "no_exception": true,
+    "toasts": 1,
+    "summaries": 0,
+    "urgencies": ["normal"],
+    "timeouts": ["30000"],
+    "body_excludes": ["bogus"],
+    "unchanged": ["notify-prefs.json"]
+  }
+}
