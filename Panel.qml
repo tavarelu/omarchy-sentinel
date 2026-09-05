@@ -52,7 +52,9 @@ Panel {
     nowMs = Date.now()
     statusProcess.running = true
     unitProcess.running = true
-    if (hostWidget && typeof hostWidget.refresh === "function") hostWidget.refresh()
+    // reloadFiles, not refresh: the widget's refresh() calls back into this
+    // function and the pair would recurse until the stack overflowed.
+    if (hostWidget && typeof hostWidget.reloadFiles === "function") hostWidget.reloadFiles()
   }
 
   function open() {

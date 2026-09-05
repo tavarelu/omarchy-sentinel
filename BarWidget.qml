@@ -48,9 +48,15 @@ BarWidget {
 
   function pauseOneHour() { run(["pause", "1h"]) }
 
-  function refresh() {
+  // Re-read the state files only. The panel calls this; it never calls
+  // refresh(), which would recurse back into the panel.
+  function reloadFiles() {
     alertsFile.reload()
     pauseFile.reload()
+  }
+
+  function refresh() {
+    reloadFiles()
     if (panelLoader.item && panelLoader.item.refresh) panelLoader.item.refresh()
   }
 
@@ -106,7 +112,7 @@ BarWidget {
     interval: 30000
     running: true
     repeat: true
-    onTriggered: root.refresh()
+    onTriggered: root.reloadFiles()
   }
 
   Loader {
