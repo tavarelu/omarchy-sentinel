@@ -1,3 +1,6 @@
+# W3-01 Grok review (read-only, diff inline, 2 turns)
+
+**READY**
 
 ## Fact-check (Context 1–6)
 
