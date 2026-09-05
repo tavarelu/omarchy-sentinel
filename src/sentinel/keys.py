@@ -56,17 +56,22 @@ def repo_root(path: str) -> str:
 def approval_prefix(alert: Alert, scope: str) -> str:
     """The cwd_prefix an approval is keyed on for ``scope``.
 
-    session / 24h / forever apply anywhere (empty prefix). this-repo means the
-    git repository of the cwd for process rules, and the exact file for write rules.
+    Process rules: session / 24h / forever apply anywhere (empty prefix);
+    this-repo means the git repository of the cwd. Write rules are always keyed
+    on the exact file; the scope only decides how long the approval lasts.
     """
+    if scope not in SCOPES_GLOBAL and scope != "this-repo":
+        raise ValueError(f"invalid scope: {scope!r}")
+    location = alert_location(alert)
+    if alert.rule in WRITE_RULES:
+        # Write rules have no writer identity (inotify reports none) and no
+        # flags, so the only thing that makes an approval specific is the file.
+        # A global prefix would key every hook write everywhere onto one
+        # fingerprint; scopes therefore only decide expiry for write rules.
+        return location
     if scope in SCOPES_GLOBAL:
         return GLOBAL_PREFIX
-    if scope == "this-repo":
-        location = alert_location(alert)
-        if alert.rule in WRITE_RULES:
-            return location
-        return repo_root(location)
-    raise ValueError(f"invalid scope: {scope!r}")
+    return repo_root(location)
 
 
 def candidate_prefixes(location: str) -> list[str]:

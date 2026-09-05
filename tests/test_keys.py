@@ -115,4 +115,20 @@ def test_this_repo_on_rself_is_exact_path(tmp_path):
         paths=[str(target)],
     )
     assert approval_prefix(w, "this-repo") == str(target)
-    assert approval_prefix(w, "forever") == ""
+    assert approval_prefix(w, "forever") == str(target)
+
+
+def test_write_rule_approval_never_becomes_global(tmp_path):
+    """One approved hook write must not silence every other hook write."""
+    from sentinel.allowlist import approve, clear_session
+    from sentinel.daemon import _is_alert_allowed
+
+    clear_session()
+    a = _write(str(tmp_path / ".claude" / "hooks" / "a.sh"))
+    b = _write(str(tmp_path / ".claude" / "hooks" / "b.sh"))
+    for scope in ("session", "24h", "forever", "this-repo"):
+        prefix = approval_prefix(a, scope)
+        assert prefix == str(tmp_path / ".claude" / "hooks" / "a.sh")
+        approve(fingerprint("R-HOOK-WRITE", "", frozenset(), prefix), scope, prefix)
+        assert _is_alert_allowed(a) is True
+        assert _is_alert_allowed(b) is False
