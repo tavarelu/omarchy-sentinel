@@ -88,6 +88,26 @@ def iter_alerts() -> Iterator[Alert]:
                 continue
 
 
+def find_alert(alert_id: str) -> tuple[int, Alert] | None:
+    """Return (1-based live-file line, alert) under the store lock, or None."""
+    path = _alerts_path()
+    with _locked():
+        if not path.exists():
+            return None
+        with path.open(encoding="utf-8") as f:
+            for line_no, raw in enumerate(f, start=1):
+                stripped = raw.strip()
+                if not stripped:
+                    continue
+                try:
+                    alert = Alert.from_dict(json.loads(stripped))
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    continue
+                if alert.id == alert_id:
+                    return line_no, alert
+        return None
+
+
 def update_alert_status(id: str, status: str) -> None:
     if status not in STATUSES:
         raise ValueError(f"invalid status: {status!r}")
