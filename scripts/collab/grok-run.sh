@@ -48,7 +48,8 @@ if [[ "$RESUME" -eq 1 && -s "$SESSION_FILE" ]]; then
   SESSION_ARGS=(-r "$(cat "$SESSION_FILE")")
 else
   SID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
-  printf '%s\n' "$SID" >"$SESSION_FILE"
+  # A dry run must not overwrite a resumable session id.
+  if [[ "$DRY" -eq 0 ]]; then printf '%s\n' "$SID" >"$SESSION_FILE"; fi
   SESSION_ARGS=(-s "$SID")
 fi
 
