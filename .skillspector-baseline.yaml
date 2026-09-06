@@ -1,0 +1,69 @@
+# SkillSpector baseline for Omarchy Sentinel.
+# Reviewed 2026-09-06 against a clean 'git archive HEAD' export with skillspector v2.9.6 --no-llm.
+# Every suppression below was read and justified in docs/collab/reviews/SKILLSPECTOR-SELF-SCAN.md.
+# Deliberate policy: src/ is suppressed per finding (fingerprints), never by glob, so any NEW
+# finding in the daemon or CLI shows up on the next scan.
+version: 2
+scanner_version: 2.9.6
+rules:
+  - path: "docs/**"
+    reason: "Documentation of the threat model. The scanner matches prose describing the attacks Sentinel detects -- 'curl | bash', 'credentials.json', 'systemctl --user enable' -- not executable content."
+  - path: "*.md"
+    reason: "Same as docs/**: README and AGENTS.md describe the behaviour being detected."
+  - path: "tests/**"
+    reason: "Test fixtures deliberately contain hostile argv, secret-shaped values and watched paths; several tests exist precisely to prove those values are redacted."
+  - path: "scripts/collab/**"
+    reason: "Developer orchestration for the two-agent workflow; not installed by the plugin. The curl is a connectivity preflight to xAI that sends no data (-o /dev/null)."
+  - path: "scripts/install-*.sh"
+    reason: "Installing a per-user systemd unit is the product's documented purpose, and the chmod 755/644 calls set mode bits on non-secret files. State files are written 0600 in 0700 dirs by sentinel.fsutil, which the scanner does not model."
+  - path: "track-b/**"
+    reason: "Track A/B health units for this T2 MacBook; same systemd-enable pattern, user scope only."
+  - path: "LICENSE"
+    reason: "The Apache-2.0 text is not code."
+  - path: "pyproject.toml"
+    reason: "Dependency metadata for a stdlib-only package; there is nothing to pin."
+fingerprints:
+- hash: sha256:c78ae6d76bd48f2af86d4ef8156df033e938a9954a908bb2c135326ffadaacb7
+  rule_id: AST7
+  file: src/sentinel/action.py
+  reason: "getattr() over the fixed SEVERITIES tuple when printing the notify policy; no attribute name comes from user or alert data."
+- hash: sha256:3a2e79b097333f53c49f652d4980e9f3d8478635af9f3b65737f256b2c3d2868
+  rule_id: AST7
+  file: src/sentinel/action.py
+  reason: "getattr() over the fixed SEVERITIES tuple when printing the notify policy; no attribute name comes from user or alert data."
+- hash: sha256:fb8e053b484e981c041297a908eddd638042294bdbd792f97045449a42672c99
+  rule_id: AST4
+  file: src/sentinel/health.py
+  reason: "subprocess.run with an argv array and a timeout for smartctl, sensors and notify-send; no shell, no alert-derived tokens."
+- hash: sha256:20e0a5607e5d7b115cdab3c93b79ce38916ee2b65e1c5393da897d9bd88cdd77
+  rule_id: AST4
+  file: src/sentinel/health.py
+  reason: "subprocess.run with an argv array and a timeout for smartctl, sensors and notify-send; no shell, no alert-derived tokens."
+- hash: sha256:89d267e3fd9c2941aed074c912f07ce655306f27fcac8a6e93e32fdf6395c27d
+  rule_id: AST4
+  file: src/sentinel/health.py
+  reason: "subprocess.run with an argv array and a timeout for smartctl, sensors and notify-send; no shell, no alert-derived tokens."
+- hash: sha256:d07ac3e7b4a689e73c492af55530ed473d84879442715201f733163eefffe7f8
+  rule_id: AST4
+  file: src/sentinel/health.py
+  reason: "subprocess.run with an argv array and a timeout for smartctl, sensors and notify-send; no shell, no alert-derived tokens."
+- hash: sha256:627f48ad18915e2a2bc19f9b1f92d6660c40b3d94bea64dcd50a2bebab9d1a0b
+  rule_id: AST4
+  file: src/sentinel/investigate.py
+  reason: "subprocess.run pipes the already-redacted detail text into $PAGER; argv array, no shell."
+- hash: sha256:c8ed886d60c59fc4f42cb1de84881b08257a76518d3bc8e9586daa79cab13b47
+  rule_id: AST4
+  file: src/sentinel/notify.py
+  reason: "subprocess.run sends the toast through the omarchy CLI as an argv array with a 5 s timeout (security review S7)."
+- hash: sha256:5f78097d3bfb6630bcea2215bb89d28a9a8eb5a8a787a55a30d60cd8dcdbe87b
+  rule_id: TT3
+  file: src/sentinel/summarize.py
+  reason: "TRUE POSITIVE, intentional and opt-in: Summarize is a separate, click-triggered oneshot that posts a redacted metadata bundle. The daemon never calls it. Tracked as S10 in SECURITY-REVIEW-2026-09-05 and scheduled for W5-06 (endpoint moves into config behind a provider allowlist)."
+- hash: sha256:79b7aa92d5e1fcfe94fb0754b97573367967a5b4a7242d3e618a772a6e8ccd9b
+  rule_id: E1
+  file: src/sentinel/summarize.py
+  reason: "TRUE POSITIVE, intentional and opt-in: Summarize is a separate, click-triggered oneshot that posts a redacted metadata bundle. The daemon never calls it. Tracked as S10 in SECURITY-REVIEW-2026-09-05 and scheduled for W5-06 (endpoint moves into config behind a provider allowlist)."
+- hash: sha256:a6e6d7338dcdd48ae025eacab9167cff2f6acc415d7fdad3ba98a57e2f257f6c
+  rule_id: PE2
+  file: src/sentinel/rules.py
+  reason: "the literal 'sudo ' is one of the argv patterns Sentinel looks for in a monitored agent's command line, not a privilege escalation of its own."
