@@ -16,7 +16,7 @@ if [[ $# -lt 1 ]]; then
   exit 2
 fi
 ID="$1"; shift
-DRY=0; MAX_TURNS=40; LEAN=0; RESUME=0; PROMPT_OVERRIDE=""
+DRY=0; MAX_TURNS=40; LEAN=0; RESUME=0; PROMPT_OVERRIDE=""; MAX_CONT=6
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY=1; shift ;;
@@ -24,6 +24,7 @@ while [[ $# -gt 0 ]]; do
     --lean) LEAN=1; shift ;;
     --resume) RESUME=1; shift ;;
     --prompt-file) PROMPT_OVERRIDE="$2"; shift 2 ;;
+    --continues) MAX_CONT="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -73,9 +74,9 @@ cat >>"$PROMPT_FILE" <<'RULES'
 - Do not re-read files whose contents are inline in this prompt, and do not spawn exploratory subagents.
 RULES
 
-CMD=(grok --prompt-file "$PROMPT_FILE" --cwd "$WT_DIR"
+CMD=(grok --cwd "$WT_DIR"
   --output-format json --permission-mode dontAsk --sandbox workspace
-  --max-turns "$MAX_TURNS" --effort high "${SESSION_ARGS[@]}"
+  --effort high
   --allow "Read" --allow "Grep" --allow "Edit" --allow "Write"
   --allow "Bash(git*)" --allow "Bash(.venv/bin/*)" --allow "Bash(python*)"
   --allow "Bash(pytest*)" --allow "Bash(ls*)" --allow "Bash(cat*)" --allow "Bash(grep*)"
@@ -94,7 +95,7 @@ echo "worktree: $WT_DIR"
 echo "output:   $OUT_JSON"
 if [[ "$LEAN" -eq 1 ]]; then CMD+=(--no-subagents); fi
 if [[ "$DRY" -eq 1 ]]; then
-  echo "dry-run: would run:"; printf '  %q' "${CMD[@]}"; echo
+  echo "dry-run: would run:"; printf '  %q' "${CMD[@]}" --max-turns "$MAX_TURNS" "${SESSION_ARGS[@]}" --prompt-file "$PROMPT_FILE"; echo
   exit 0
 fi
 
@@ -118,8 +119,42 @@ if [[ ! -x "$WT_DIR/.venv/bin/pytest" ]]; then
   "$WT_DIR/.venv/bin/pip" -q install -e "$WT_DIR[dev]"
 fi
 
-"${CMD[@]}" >"$OUT_JSON" 2>"$RUN_DIR/$ID-$STAMP.stderr" || true
-echo "stop reason: $(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('stopReason'),'session',d.get('sessionId'))" "$OUT_JSON" 2>/dev/null || echo 'unparsable output')"
+stop_reason() {  # $1 = json file
+  python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('stopReason') or '')" "$1" 2>/dev/null || echo unparsable
+}
+run_cost() {
+  python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('num_turns'),d.get('total_cost_usd'))" "$1" 2>/dev/null || echo "? ?"
+}
+packet_done() {  # committed work and a report, with nothing left uncommitted
+  [[ -f "$WT_DIR/docs/collab/reports/$ID-report.md" ]] \
+    && [[ -n "$(git -C "$WT_DIR" log --oneline "$BASE_BRANCH..$BRANCH" 2>/dev/null)" ]] \
+    && [[ -z "$(git -C "$WT_DIR" status --porcelain)" ]]
+}
+
+"${CMD[@]}" --max-turns "$MAX_TURNS" "${SESSION_ARGS[@]}" --prompt-file "$PROMPT_FILE" \
+  >"$OUT_JSON" 2>"$RUN_DIR/$ID-$STAMP.stderr" || true
+echo "attempt 0: stop=$(stop_reason "$OUT_JSON") turns/cost=$(run_cost "$OUT_JSON")"
+
+# The headless client ends the prompt whenever the model emits a turn with no tool call, reporting
+# stopReason "cancelled" even mid-packet. Continue the same session until the packet is actually finished,
+# the model stops for a real reason, or the continuation budget runs out. Each continuation re-reads a
+# cached context, so it is cheap compared with losing the run.
+CONT_PROMPT="$RUN_DIR/$ID-$STAMP.continue.md"
+cat >"$CONT_PROMPT" <<'CONT'
+Continue the packet. Your previous turn ended with prose and no tool call, which ends the run in this client.
+Do not restate your plan. Your next output must be a tool call, and every turn until the final commit must
+contain one. Finish the implementation, run .venv/bin/pytest -q, write the report, and commit.
+CONT
+attempt=0
+while [[ "$(stop_reason "$OUT_JSON")" == "cancelled" && $attempt -lt $MAX_CONT ]]; do
+  if packet_done; then break; fi
+  attempt=$((attempt + 1))
+  OUT_JSON="$RUN_DIR/$ID-$STAMP.cont$attempt.json"
+  "${CMD[@]}" --max-turns "$MAX_TURNS" -r "$(cat "$SESSION_FILE")" \
+    --prompt-file "$CONT_PROMPT" >"$OUT_JSON" 2>>"$RUN_DIR/$ID-$STAMP.stderr" || true
+  echo "attempt $attempt: stop=$(stop_reason "$OUT_JSON") turns/cost=$(run_cost "$OUT_JSON")"
+done
+if packet_done; then echo "packet finished after $attempt continuation(s)"; fi
 echo "report:   $WT_DIR/docs/collab/reports/$ID-report.md"
 git -C "$WT_DIR" log --oneline "$BASE_BRANCH..$BRANCH" | head -20
 if [[ -n "$(git -C "$WT_DIR" status --porcelain)" ]]; then
