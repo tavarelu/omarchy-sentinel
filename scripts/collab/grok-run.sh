@@ -61,6 +61,17 @@ Run the full suite with .venv/bin/pytest -q and put the real count in the report
 PROMPT
 fi
 
+# Standing rules appended to every prompt. The headless client treats a text-only assistant turn as the
+# end of the run (stopReason "cancelled"), which has stopped runs mid-packet with the work uncommitted.
+cat >>"$PROMPT_FILE" <<'RULES'
+
+===== RUN RULES (appended by grok-run.sh) =====
+- Never end a turn with prose while work remains: every turn until the final commit must contain a tool call.
+  Announcing a next step without calling a tool ends this run and loses your uncommitted work.
+- Commit early and often on your branch; an uncommitted tree is work the run can lose.
+- Do not re-read files whose contents are inline in this prompt, and do not spawn exploratory subagents.
+RULES
+
 CMD=(grok --prompt-file "$PROMPT_FILE" --cwd "$WT_DIR"
   --output-format json --permission-mode dontAsk --sandbox workspace
   --max-turns "$MAX_TURNS" --effort high "${SESSION_ARGS[@]}"
@@ -110,3 +121,7 @@ fi
 echo "stop reason: $(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('stopReason'),'session',d.get('sessionId'))" "$OUT_JSON" 2>/dev/null || echo 'unparsable output')"
 echo "report:   $WT_DIR/docs/collab/reports/$ID-report.md"
 git -C "$WT_DIR" log --oneline "$BASE_BRANCH..$BRANCH" | head -20
+if [[ -n "$(git -C "$WT_DIR" status --porcelain)" ]]; then
+  echo "NOTE: the run left uncommitted work in $WT_DIR -- review it before concluding the run produced nothing:"
+  git -C "$WT_DIR" status --short
+fi
