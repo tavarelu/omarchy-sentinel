@@ -1,5 +1,5 @@
 from sentinel.models import Alert
-from sentinel.store import append_alert, iter_alerts, update_alert_status
+from sentinel.store import append_alert, find_alert, iter_alerts, update_alert_status
 
 def test_append_and_read_alert(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
@@ -85,3 +85,61 @@ def test_iter_skips_torn_line(monkeypatch, tmp_path):
     with (tmp_path / "sentinel" / "alerts.jsonl").open("a") as f:
         f.write('{"id": "torn", "rule": "R-')
     assert [r.id for r in iter_alerts()] == [a.id]
+
+
+def test_find_alert_returns_line_number_and_alert(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    first = Alert.new(
+        rule="R-BYPASS",
+        severity="high",
+        summary="one",
+        pids=[1],
+        exe="",
+        basename="claude",
+        cmdline=["claude"],
+        cwd="/p",
+        evidence={},
+    )
+    second = Alert.new(
+        rule="R-SELF",
+        severity="low",
+        summary="two",
+        pids=[],
+        exe="",
+        basename="",
+        cmdline=[],
+        cwd="",
+        evidence={},
+    )
+    append_alert(first)
+    append_alert(second)
+    found = find_alert(second.id)
+    assert found is not None
+    line_no, alert = found
+    assert line_no == 2
+    assert alert.id == second.id
+    assert alert.rule == "R-SELF"
+    found_first = find_alert(first.id)
+    assert found_first is not None
+    assert found_first[0] == 1
+    assert found_first[1].id == first.id
+
+
+def test_find_alert_missing_returns_none(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    assert find_alert("no-such-alert") is None
+    a = Alert.new(
+        rule="R-BYPASS",
+        severity="high",
+        summary="x",
+        pids=[1],
+        exe="",
+        basename="claude",
+        cmdline=["claude"],
+        cwd="/p",
+        evidence={},
+    )
+    append_alert(a)
+    assert find_alert("still-missing") is None

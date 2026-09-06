@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
+import subprocess
 import sys
 import tomllib
 from datetime import datetime, timedelta, timezone
@@ -12,7 +14,7 @@ from pathlib import Path
 from sentinel.allowlist import SCOPES, approve, fingerprint
 from sentinel.fsutil import write_private_atomic
 from sentinel.keys import alert_flag_set, approval_prefix
-from sentinel.investigate import page_detail
+from sentinel.investigate import action_lines, page_detail
 from sentinel.kill import (
     confirm_kill as kill_confirm,
     cwd_is_precious as cwd_matches_precious,
@@ -21,7 +23,7 @@ from sentinel.kill import (
 )
 from sentinel.models import Alert
 from sentinel.paths import default_config_path, state_dir
-from sentinel.store import iter_alerts, update_alert_status
+from sentinel.store import find_alert, iter_alerts, update_alert_status
 
 PAUSE_FILENAME = "pause_until"
 COMMANDS = frozenset(
@@ -36,6 +38,7 @@ COMMANDS = frozenset(
         "status",
         "pause",
         "notify",
+        "open",
     }
 )
 _DURATION_RE = re.compile(r"^(\d+)([smhd])$", re.IGNORECASE)
@@ -125,10 +128,10 @@ def cwd_is_precious(cwd: str, prefixes: list[str] | None = None) -> bool:
 
 
 def get_alert(alert_id: str) -> Alert:
-    for alert in iter_alerts():
-        if alert.id == alert_id:
-            return alert
-    raise KeyError(alert_id)
+    found = find_alert(alert_id)
+    if found is None:
+        raise KeyError(alert_id)
+    return found[1]
 
 
 def resolve_child_pids(alert: Alert) -> list[int]:
@@ -177,12 +180,12 @@ def cmd_dismiss(alert_id: str) -> int:
 
 
 def cmd_investigate(alert_id: str) -> int:
-    try:
-        alert = get_alert(alert_id)
-    except KeyError:
+    found = find_alert(alert_id)
+    if found is None:
         print(f"unknown alert: {alert_id}", file=sys.stderr)
         return 1
-    page_detail(alert)
+    line_no, alert = found
+    page_detail(alert, line_no=line_no)
     update_alert_status(alert.id, "investigated")
     return 0
 
@@ -213,16 +216,8 @@ def cmd_menu(alert_id: str) -> int:
     print(f"Alert {alert.id} [{alert.status}] {alert.severity} {alert.rule}")
     print(f"  {alert.summary}")
     print("Actions:")
-    print("  approve")
-    print("  kill")
-    print("  investigate")
-    print("  summarize")
-    print("  dismiss")
-    print(f"  sentinel-action {alert.id} approve --scope session|24h|this-repo|forever")
-    print(f"  sentinel-action {alert.id} kill [--session] [--yes]")
-    print(f"  sentinel-action {alert.id} investigate")
-    print(f"  sentinel-action {alert.id} summarize")
-    print(f"  sentinel-action {alert.id} dismiss")
+    for line in action_lines(alert):
+        print(line)
     return 0
 
 
@@ -339,6 +334,62 @@ def cmd_notify(severities: list[str], *, reset: bool = False, as_json: bool = Fa
     return 0
 
 
+def open_target(alert: Alert, *, logs: bool = False) -> tuple[str, Path]:
+    """Pick a nautilus target: the file, its parent, cwd, or the state dir."""
+    if logs:
+        return ("dir", state_dir())
+    if alert.paths:
+        path = Path(alert.paths[0])
+        if not path.is_absolute():
+            raise ValueError("relative path")
+        if path.is_file():
+            return ("select", path)
+        return ("dir", path.parent)
+    cwd = alert.cwd
+    if cwd:
+        path = Path(cwd)
+        if not path.is_absolute():
+            raise ValueError("relative path")
+        return ("dir", path)
+    raise ValueError("missing location")
+
+
+def open_argv(mode: str, path: Path) -> list[str]:
+    if mode == "select":
+        return ["uwsm-app", "--", "nautilus", "--select", path.as_uri()]
+    return ["uwsm-app", "--", "nautilus", "--new-window", str(path)]
+
+
+def launch_detached(argv: list[str], *, popen: type[subprocess.Popen] = subprocess.Popen) -> None:
+    """Start nautilus out-of-process; do not inherit stdio or the session."""
+    popen(
+        argv,
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def cmd_open(alert_id: str, *, logs: bool = False) -> int:
+    try:
+        alert = get_alert(alert_id)
+    except KeyError:
+        print(f"unknown alert: {alert_id}", file=sys.stderr)
+        return 1
+    try:
+        mode, path = open_target(alert, logs=logs)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if shutil.which("nautilus") is None:
+        print(str(path))
+        return 1
+    print(f"opening {path}")
+    launch_detached(open_argv(mode, path))
+    return 0
+
+
 def cmd_kill(alert_id: str, *, session: bool, yes: bool, force_stale: bool = False) -> int:
     try:
         alert = get_alert(alert_id)
@@ -447,6 +498,14 @@ def action_main(argv: list[str] | None = None) -> int:
     notify_p.add_argument("--reset", action="store_true", help="Remove runtime preferences; config defaults apply")
     notify_p.add_argument("--json", action="store_true", help="Machine-readable output")
 
+    open_p = sub.add_parser("open", help="Reveal the alerted file or open its directory")
+    open_p.add_argument("alert_id")
+    open_p.add_argument(
+        "--logs",
+        action="store_true",
+        help="Open the Sentinel state directory",
+    )
+
     if not argv:
         parser.print_help()
         return 0
@@ -475,5 +534,7 @@ def action_main(argv: list[str] | None = None) -> int:
         return cmd_pause(args.duration)
     if args.command == "notify":
         return cmd_notify(args.severity, reset=args.reset, as_json=args.json)
+    if args.command == "open":
+        return cmd_open(args.alert_id, logs=args.logs)
     parser.print_help()
     return 0

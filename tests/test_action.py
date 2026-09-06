@@ -1,8 +1,12 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
+from sentinel.action import open_argv, open_target
 from sentinel.allowlist import clear_session, fingerprint, is_allowed
 from sentinel.cli import action_main
 from sentinel.models import Alert
+from sentinel.paths import state_dir
 from sentinel.store import append_alert, iter_alerts
 
 
@@ -371,3 +375,103 @@ def test_notify_json_output(capsys):
     assert action_main(["notify", "--json"]) == 0
     data = json.loads(capsys.readouterr().out)
     assert data["medium"] is False and data["source"]["medium"] == "prefs" and data["source"]["high"] == "config"
+
+
+def test_open_reveals_existing_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    target = tmp_path / "watched" / "settings.json"
+    target.parent.mkdir()
+    target.write_text("{}", encoding="utf-8")
+    alert = _alert(rule="R-HOOK-WRITE", paths=[str(target)], cwd="", pids=[])
+    mode, path = open_target(alert)
+    assert mode == "select"
+    assert path == target
+    assert open_argv(mode, path) == [
+        "uwsm-app",
+        "--",
+        "nautilus",
+        "--select",
+        target.as_uri(),
+    ]
+    append_alert(alert)
+    launched: list[list[str]] = []
+    monkeypatch.setattr("sentinel.action.shutil.which", lambda name: "/usr/bin/nautilus")
+    monkeypatch.setattr(
+        "sentinel.action.launch_detached",
+        lambda argv, **k: launched.append(list(argv)),
+    )
+    assert action_main([alert.id, "open"]) == 0
+    assert launched == [open_argv("select", target)]
+
+
+def test_open_falls_back_to_parent_when_file_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    missing = tmp_path / "watched" / "gone.json"
+    missing.parent.mkdir()
+    alert = _alert(rule="R-HOOK-WRITE", paths=[str(missing)], cwd="", pids=[])
+    mode, path = open_target(alert)
+    assert mode == "dir"
+    assert path == missing.parent
+    assert open_argv(mode, path) == [
+        "uwsm-app",
+        "--",
+        "nautilus",
+        "--new-window",
+        str(path),
+    ]
+
+
+def test_open_uses_cwd_for_process_alert(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    alert = _alert(paths=None, cwd=str(cwd))
+    mode, path = open_target(alert)
+    assert mode == "dir"
+    assert path == cwd
+
+
+def test_open_logs_opens_state_dir(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    alert = _alert()
+    mode, path = open_target(alert, logs=True)
+    assert mode == "dir"
+    assert path == state_dir()
+    assert path == tmp_path / "state" / "sentinel"
+
+
+def test_open_refuses_relative_path_and_missing_location(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    relative = _alert(paths=["relative/file.json"], cwd="")
+    with pytest.raises(ValueError):
+        open_target(relative)
+    missing = _alert(paths=None, cwd="")
+    with pytest.raises(ValueError):
+        open_target(missing)
+    rel_cwd = _alert(paths=None, cwd="not/absolute")
+    with pytest.raises(ValueError):
+        open_target(rel_cwd)
+
+
+def test_open_unknown_alert_fails(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    assert action_main(["open", "missing-id"]) == 1
+    assert "unknown alert" in capsys.readouterr().err
+
+
+def test_menu_lists_open_and_logs(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    alert = _alert()
+    append_alert(alert)
+    assert action_main([alert.id, "menu"]) == 0
+    menu = capsys.readouterr().out
+    assert f"sentinel-action {alert.id} open" in menu
+    assert f"sentinel-action {alert.id} open --logs" in menu
+    assert "approve --scope" in menu
