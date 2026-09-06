@@ -27,7 +27,8 @@ _SENSITIVE_SUBSTR_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Matches daemon.SAMPLER_MAX without importing the daemon module.
+# Mirrors daemon.SAMPLER_MAX without importing the daemon (and its ctypes libc
+# binding) into the CLI. tests/test_investigate.py pins the two together.
 _SAMPLER_MAX_S = 5
 
 SECTION_ORDER = (
@@ -140,9 +141,17 @@ def _alert_path(alert: Alert) -> str | None:
     return str(path) if path else None
 
 
+def _as_pid(value: Any) -> int | None:
+    """Coerce a recorded pid to int; a malformed row must not crash investigate."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _first_pid(alert: Alert) -> int | None:
     if alert.pids:
-        return int(alert.pids[0])
+        return _as_pid(alert.pids[0])
     return None
 
 
@@ -299,7 +308,8 @@ def _render_child_shell(
     parent = redact_mapping(parent) if parent else {}
     parent_pid = parent.get("pid", ev.get("parent_pid"))
     parent_base = parent.get("basename")
-    child_pids = ev.get("child_pids") or []
+    raw_children = ev.get("child_pids")
+    child_pids = list(raw_children) if isinstance(raw_children, (list, tuple)) else []
     cmdline = " ".join(alert.cmdline) if alert.cmdline else None
     facts = _facts(
         _fact("kind", ev.get("kind"), source),
@@ -308,16 +318,17 @@ def _render_child_shell(
         _fact("child_pids", child_pids or None, source),
         _fact("cmdline", cmdline, source),
     )
+    child_ints = [pid for pid in (_as_pid(child) for child in child_pids) if pid is not None]
     pids: list[str] = []
-    if parent_pid is not None:
-        pids.append(str(int(parent_pid)))
-    for child in child_pids:
-        pids.append(str(int(child)))
+    parent_int = _as_pid(parent_pid)
+    if parent_int is not None:
+        pids.append(str(parent_int))
+    pids.extend(str(pid) for pid in child_ints)
     verify: list[str] = []
     if pids:
         verify.append(f"ps -o pid,ppid,lstart,args -p {','.join(pids)}")
-    for child in child_pids:
-        verify.append(f"awk '{{print $4}}' {_q(f'/proc/{int(child)}/stat')}")
+    for child in child_ints:
+        verify.append(f"awk '{{print $4}}' {_q(f'/proc/{child}/stat')}")
     limits = ["interactive-shell detection is argv-based"] + _legacy_limit(alert)
     return _what_fired(alert), facts, verify, limits
 

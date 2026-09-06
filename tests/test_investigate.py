@@ -524,3 +524,25 @@ def test_actions_section_matches_menu(monkeypatch, tmp_path):
     write = _hook_write()
     write_actions = "\n".join(action_lines(write))
     assert "kill" not in write_actions
+
+
+def test_sampler_limit_tracks_the_daemon_constant():
+    """The Limits line quotes a sampler window; keep it honest if the daemon moves."""
+    from sentinel import daemon, investigate
+
+    assert investigate._SAMPLER_MAX_S == int(daemon.SAMPLER_MAX)
+
+
+def test_child_shell_renders_when_pids_are_malformed():
+    """A hand-edited or truncated row must render, not raise."""
+    alert = _alert(
+        rule="R-CHILD-SHELL",
+        pids=["not-a-pid"],
+        parent={"pid": "bogus", "basename": "claude"},
+        evidence={"kind": "shell", "child_pids": "7", "parent_pid": None},
+    )
+    sections = {s.title: s.lines for s in render_sections(alert, state_dir="/tmp/state")}
+    assert sections["What fired"]
+    joined = "\n".join(sections["Verify it yourself"])
+    assert "/proc/None/stat" not in joined
+    assert "not-a-pid" not in joined
