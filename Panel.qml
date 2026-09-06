@@ -31,6 +31,8 @@ Panel {
   readonly property color hoverFill: bar ? Style.hoverFillFor(bar.foreground, Color.accent) : "transparent"
   readonly property color selectedFill: bar ? Style.selectedFillFor(bar.foreground, Color.accent) : "transparent"
   readonly property color track: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.12)
+  // Used to notch the risk meter's band boundaries out of the track.
+  readonly property color surface: Color.background
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   readonly property var rows: hostWidget && hostWidget.openRows ? hostWidget.openRows : []
@@ -173,14 +175,24 @@ Panel {
     }
   }
 
-  // Track-and-fill meter for a SkillSpector score. The API is frozen (value
-  // 0..1 or -1 to hide, verdict text); the visual is decided on the design
-  // canvas (UX-04) and may become a ring drawn with Shape + PathAngleArc.
+  // Banded track-and-fill meter for a SkillSpector score (D-008, 2026-09-06:
+  // the Owner picked the bar over a ring gauge). Bands follow SkillSpector's own
+  // scale -- 0 to 20 SAFE, 21 to 50 CAUTION, 51 and up DO NOT INSTALL -- and the
+  // band text comes from the scan's own verdict whenever it carries one, so the
+  // panel never invents a verdict of its own.
   component RiskMeter: Item {
     id: meter
     property real value: -1
     property string verdict: ""
-    readonly property bool alarming: value >= 0.5
+    readonly property real cautionAt: 0.20
+    readonly property real dangerAt: 0.50
+    readonly property bool alarming: value >= dangerAt
+    readonly property bool caution: value >= cautionAt && value < dangerAt
+    readonly property color fillColor: alarming ? root.urgent
+      : caution ? Qt.rgba(root.urgent.r, root.urgent.g, root.urgent.b, 0.55)
+      : root.foreground
+    readonly property string bandText: verdict !== "" ? verdict
+      : alarming ? "DO NOT INSTALL" : caution ? "CAUTION" : "SAFE"
     visible: value >= 0
     implicitHeight: visible ? Style.space(14) : 0
 
@@ -201,15 +213,29 @@ Panel {
       height: meterTrack.height
       radius: meterTrack.radius
       width: meterTrack.width * Math.max(0, Math.min(1, meter.value))
-      color: meter.alarming ? root.urgent : root.foreground
+      color: meter.fillColor
       Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+    }
+
+    // Band boundaries, drawn as gaps in the track so the score can be read
+    // against SAFE / CAUTION / DO NOT INSTALL without a legend.
+    Repeater {
+      model: [meter.cautionAt, meter.dangerAt]
+      Rectangle {
+        x: meterTrack.x + Math.round(meterTrack.width * modelData) - width / 2
+        anchors.verticalCenter: meterTrack.verticalCenter
+        width: Math.max(1, Math.round(meterTrack.height * 0.34))
+        height: meterTrack.height
+        color: root.surface
+        opacity: 0.9
+      }
     }
 
     Text {
       id: verdictLabel
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
-      text: meter.verdict !== "" ? Math.round(meter.value * 100) + " · " + meter.verdict : Math.round(meter.value * 100)
+      text: Math.round(meter.value * 100) + " · " + meter.bandText
       color: meter.alarming ? root.urgent : root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
