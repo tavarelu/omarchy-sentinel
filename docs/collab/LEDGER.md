@@ -54,8 +54,10 @@ States: written, running, reported, returned, accepted, escalated.
 | 2026-09-05 | W3-01 review, diff inline, no tools | 2 | READY, 752 words |
 | 2026-09-05 | UX-01 implementation, inline packet + sources, sandbox workspace | 40 | cancelled at the cap while re-reading files whose inline copies carried stale line numbers; 0 commits |
 | 2026-09-05 | UX-01 reassigned to Chief after that cancellation (Owner decision) | n/a | landed as af74d16, 183 tests green, 0 Grok turns spent |
+| 2026-09-06 | UX-02a implementation, inline packet + sources, sandbox workspace | 120 | client ended the session on a text-only turn after 16 tool calls ($0.20); the implementation was complete and green but uncommitted |
+| 2026-09-06 | two resumes of that session to write the report and commit | 25 each | both ended the same way on the first turn ($0.04 total, no work); the Chief committed Grok's tree and wrote the report |
 
-Lessons: give Grok the material inline and cap turns low for reviews; `--max-turns` counts tool calls, so an implementation packet needs about 100 to 120; never cite line numbers in a packet that Grok will compare against the tree.
+Lessons: give Grok the material inline and cap turns low for reviews; `--max-turns` counts tool calls, so an implementation packet needs about 100 to 120; never cite line numbers in a packet that Grok will compare against the tree. The headless client (`grok 1.0.13`, `--output-format json`) treats a text-only assistant turn as the end of the prompt and reports `stopReason: cancelled`, so a run can stop mid-packet with its work uncommitted in the worktree: always check `git status` in `.worktrees/grok-<ID>` before concluding a cancelled run produced nothing, and prefer to finish the report and the commit on the Chief side rather than paying for resumes that narrate instead of acting.
 
 ## Live evidence log
 
