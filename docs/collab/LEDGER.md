@@ -28,7 +28,7 @@ Updated by Chief only. Grok reads it; Grok never edits it.
 | UX-02a | Investigate v2 and open-folder | packet written; next Grok run after UX-01 | | | |
 | UX-02b | Evidence v2 capture | planned, after W3-02/03/04 | | | |
 | UX-03 | Panel v2 | done `48b2eeb`, live-smoked 02:24 (chips, folder icons, wrapped legend); card actions await alerts | feature | | screenshot sent to Owner |
-| UX-04 | Risk visual canvas | published for Owner's pick: https://claude.ai/code/artifact/036d35ed-efe5-4160-9bc0-f795721291f8 | | | D-008 pending |
+| UX-04 | Risk visual canvas | published: https://claude.ai/code/artifact/036d35ed-efe5-4160-9bc0-f795721291f8 | | | D-008 DECIDED 2026-09-06: bar with SAFE / CAUTION / DO NOT INSTALL bands |
 | W5-03 | Omarchy plugin (pulled forward) | scaffold live-smoked 2026-09-05: bar count, panel, cards, Dismiss round trip; three bugs fixed; shell restart required after QML edits | feature | | Owner saw screenshots |
 
 States: written, running, reported, returned, accepted, escalated.
@@ -65,6 +65,7 @@ Lessons: give Grok the material inline and cap turns low for reviews; `--max-tur
 |------|------|-------------|
 | 2026-09-05 00:33 to 02:10 | daemon's first 81 min: 132 alerts, 127 of them high R-HOOK-WRITE from one plugin-marketplace refresh at 05:17 UTC, 5 medium R-SELF from Claude Code's lock directory; 1 min 8 s CPU | Owner approved 95 files one by one. UX-00 fixed the lock noise; W3-03 (scout precision) and UX-01 (burst summary) are the fixes for the storm. |
 | 2026-09-05 15:18 | UX-01 live proof on the Owner's screen: 7 synthetic high alerts from an isolated XDG dir produced 5 individual toasts, then one summary ("Sentinel: 7 alerts / 7 high — newest: ...") rewritten in place with `-r` for alerts 6 and 7; every toast was gone 34 s later | auto-dismiss and burst mode accepted; panel v2 chips, card, Logs button and wrapped hints verified in the same screenshots |
+| 2026-09-06 01:20 | UX-02a deployed to the installed plugin (`omarchy plugin update tav.sentinel --yes`); the live CLI now offers `open`, and `render_sections` was run read-only over the real alerts.jsonl (133 rows) | the R-HOOK-WRITE row for `~/.claude/.credentials.json` renders all six sections with citations, the writer-unknown limit, and its own line number (131); no status was mutated |
 | 2026-09-05 02:12 | keying bug found: write-rule approvals with a global scope would have collapsed onto one fingerprint | fixed the same hour; live allowlist was safe (all 95 entries exact-file) |
 
 ## Known limits carried into wave 3
