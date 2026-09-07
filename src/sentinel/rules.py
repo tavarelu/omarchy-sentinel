@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from sentinel.models import Alert
+from sentinel.vendors import bare_bypass_tokens, paired_bypass_flags, redact_argv
 
 DEFAULT_BYPASS_FLAGS: frozenset[str] = frozenset(
     {
@@ -110,14 +111,37 @@ def extract_bypass_flags(
     cmdline: list[str],
     extra_bypass_flags: Iterable[str] | None = None,
 ) -> list[str]:
-    known = set(DEFAULT_BYPASS_FLAGS)
+    """Bypass flags present in ``cmdline``.
+
+    Consumes ``vendors.VENDORS``' ``argv_bypass`` from *every* vendor
+    (union, no gating on cmdline[0] — a flag from any known vendor is
+    detected regardless of which basename is running, matching today's
+    DEFAULT_BYPASS_FLAGS behavior and the packet's own wording), plus the
+    pre-existing ``extra_bypass_flags`` config-extras parameter fed from
+    config.toml's ``extra_bypass_flags`` key (daemon.py) — distinct from
+    vendors.py's ``config_bypass`` mechanism despite the name collision.
+
+    Detects two-token ``--flag value`` pairs (for example
+    ``--permission-mode dontAsk``) in addition to single bare tokens, and
+    reports a detected pair as the string ``--flag=value``.
+    """
+    known = set(DEFAULT_BYPASS_FLAGS) | set(bare_bypass_tokens())
     if extra_bypass_flags:
         known.update(extra_bypass_flags)
+    pair_flags = paired_bypass_flags()
     found: list[str] = []
-    for raw in cmdline:
+    i = 0
+    n = len(cmdline)
+    while i < n:
+        raw = cmdline[i]
+        if raw in pair_flags and i + 1 < n and cmdline[i + 1] in pair_flags[raw]:
+            found.append(f"{raw}={cmdline[i + 1]}")
+            i += 2
+            continue
         token = _normalize_token(raw)
         if token in known or raw in known:
             found.append(raw if raw in known else token)
+        i += 1
     return found
 
 
@@ -133,6 +157,12 @@ def evaluate_process(
         return None
     flag = flags[0]
     basename = _basename(exe) or (cmdline[0] if cmdline else "")
+    # S4: replace secret-shaped argv values before they ever reach the
+    # Alert (AGENTS.md invariant 2/5 — no secrets in alerts, logs or repo).
+    safe_cmdline, was_redacted = redact_argv(list(cmdline))
+    evidence: dict[str, Any] = {"flag": flag, "flags": flags}
+    if was_redacted:
+        evidence["redacted"] = True
     return Alert.new(
         rule="R-BYPASS",
         severity="high",
@@ -140,9 +170,9 @@ def evaluate_process(
         pids=[],
         exe=exe,
         basename=basename,
-        cmdline=list(cmdline),
+        cmdline=safe_cmdline,
         cwd=cwd,
-        evidence={"flag": flag, "flags": flags},
+        evidence=evidence,
     )
 
 

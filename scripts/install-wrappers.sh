@@ -78,6 +78,56 @@ env_key() {
   echo "$1" | tr '[:lower:]-' '[:upper:]_'
 }
 
+# Canonicalize a path for comparison only (never for execution): PATH can
+# carry two spellings of the same real directory (this machine's uv-style
+# ~/.local/bin/env prepends the non-canonical "~/.local/share/../bin"), so a
+# raw string compare of `command -v` output against $target false-positives
+# "shadowed" on a shim that is genuinely first on PATH.
+canon() {
+  local p="$1"
+  if command -v realpath >/dev/null 2>&1; then
+    realpath -m -- "$p" 2>/dev/null && return 0
+  fi
+  local dir base
+  dir="$(dirname -- "$p")"
+  base="$(basename -- "$p")"
+  if dir="$(cd "$dir" 2>/dev/null && pwd -P)"; then
+    printf '%s/%s\n' "$dir" "$base"
+  else
+    printf '%s\n' "$p"
+  fi
+}
+
+# Never leave a silent shadowed shim: verify the shell a toast click
+# actually runs through (a login shell) resolves this name to the shim we
+# just wrote, not to something earlier on PATH (mise installs on this
+# machine, most often).
+verify_on_login_path() {
+  local name="$1" target="$2"
+  local resolved
+  resolved="$(bash -lc "command -v $(printf '%q' "$name")" 2>/dev/null || true)"
+  if [[ -z "$resolved" ]]; then
+    echo "install-wrappers: FATAL: '$name' is not on the login PATH at all after install (shim at $target is unreachable)" >&2
+    print_path_fix "$name"
+    return 1
+  fi
+  if [[ "$(canon "$resolved")" != "$(canon "$target")" ]]; then
+    echo "install-wrappers: FATAL: '$name' is shadowed — the login shell resolves it to $resolved, not $target" >&2
+    print_path_fix "$name"
+    return 1
+  fi
+  echo "verified: '$name' resolves to $target on the login PATH"
+  return 0
+}
+
+print_path_fix() {
+  local name="$1"
+  echo "  fix 1: put \$BIN_DIR ($BIN_DIR) before the mise entries in your shell rc" >&2
+  echo "  fix 2: set SENTINEL_BIN_DIR to a directory that already precedes mise on PATH" >&2
+  echo "         (~/.local/share/mise/shims is NOT acceptable — it IS the shadow)" >&2
+  echo "  re-run: SENTINEL_BIN_DIR=<dir> $0 $name" >&2
+}
+
 for name in "$@"; do
   target="$BIN_DIR/$name"
   real=""
@@ -108,4 +158,5 @@ for name in "$@"; do
   } >"$target"
   chmod +x "$target"
   echo "installed $target → sentinel-wrap $name${real:+ (real=$real)}"
+  verify_on_login_path "$name" "$target"
 done

@@ -13,6 +13,7 @@ from sentinel.models import Alert
 from sentinel.paths import state_dir
 from sentinel.procinfo import instance_key, read_starttime
 from sentinel.rules import evaluate_process, extract_bypass_flags
+from sentinel.vendors import redact_argv
 
 LAUNCHES_FILENAME = "launches.jsonl"
 
@@ -33,17 +34,24 @@ def record_launch(
 ) -> dict[str, Any]:
     """Append one launch record to state_dir()/launches.jsonl and return it."""
     cmdline = [basename, *argv]
+    # Flags are literal tokens (e.g. "--yolo"), never secret-shaped, so it is
+    # safe to compute them from the original argv before redaction.
     flags = extract_bypass_flags(cmdline, extra_bypass_flags)
+    # S4: this is the actual persistence point (launches.jsonl on disk) a
+    # secret must never reach, so redaction happens here at write time, not
+    # only in evaluate_process's in-memory Alert (AGENTS.md invariant 2/5).
+    safe_cmdline, was_redacted = redact_argv(cmdline)
     real_pid = pid if pid is not None else os.getpid()
     record: dict[str, Any] = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "basename": basename,
-        "cmdline": cmdline,
+        "cmdline": safe_cmdline,
         "cwd": cwd if cwd is not None else os.getcwd(),
         "exe": exe or "",
         "pid": pid if pid is not None else os.getpid(),
         "ppid": ppid if ppid is not None else os.getppid(),
         "flags": flags,
+        "redacted": was_redacted,
         # The wrapper shell execs into the agent, so its pid and start time
         # survive the exec and identify the agent process instance.
         "starttime": read_starttime(real_pid),
@@ -77,6 +85,11 @@ def launch_to_alert(
         starttime = record.get("starttime")
         alert.evidence["starttime"] = starttime
         alert.evidence["instance"] = instance_key(int(pid), starttime)
+    # The record's cmdline is already redacted at write time (S4); a second
+    # redact_argv pass inside evaluate_process finds nothing left to redact,
+    # so carry the record's own flag forward instead of losing the signal.
+    if record.get("redacted"):
+        alert.evidence["redacted"] = True
     alert.evidence["source"] = "launches"
     if record.get("ts"):
         alert.evidence["launch_ts"] = record["ts"]

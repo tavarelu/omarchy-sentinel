@@ -49,6 +49,45 @@ def test_record_launch_appends_jsonl(tmp_path, monkeypatch):
     assert loaded["flags"] == record["flags"]
 
 
+def test_record_launch_redacts_secret_before_writing_jsonl(tmp_path, monkeypatch):
+    # S4: launches.jsonl is the actual persistence point a secret must never
+    # reach — assert against the file's own bytes, not just the returned dict.
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    record = record_launch("claude", ["--api-key", "sk-test-123", "--yolo"])
+    assert "<redacted>" in record["cmdline"]
+    assert "sk-test-123" not in record["cmdline"]
+    assert record["redacted"] is True
+    # The bypass flag itself is still detected from the pre-redaction argv.
+    assert "--yolo" in record["flags"]
+
+    path = tmp_path / "sentinel" / "launches.jsonl"
+    on_disk = path.read_text(encoding="utf-8")
+    assert "sk-test-123" not in on_disk
+    assert "<redacted>" in on_disk
+
+
+def test_record_launch_no_secret_no_redacted_flag(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    record = record_launch("claude", ["--yolo"])
+    assert record["redacted"] is False
+
+
+def test_launch_to_alert_carries_redacted_flag_from_record():
+    alert = launch_to_alert(
+        {
+            "basename": "claude",
+            "cmdline": ["claude", "--api-key", "<redacted>", "--yolo"],
+            "cwd": "/tmp/scratch",
+            "exe": "/usr/bin/claude",
+            "flags": ["--yolo"],
+            "pid": 1234,
+            "redacted": True,
+        }
+    )
+    assert alert is not None
+    assert alert.evidence.get("redacted") is True
+
+
 def test_launch_to_alert_rbypass():
     alert = launch_to_alert(
         {

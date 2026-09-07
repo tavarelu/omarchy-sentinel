@@ -1,9 +1,12 @@
 {
   // Sentinel control-plane entries for Omarchy menu (dotted ids).
   // Merge via: scripts/install-menu.sh [--apply]
+  // W3-05: every action opens a floating terminal (omarchy-shell execs
+  // --exec directly with no terminal otherwise, so a headless action would
+  // run and vanish with no way to see its output or answer a prompt).
   "sentinel": {"icon": "󰒃", "label": "Sentinel"},
-  "sentinel.alerts": {"icon": "󰀪", "label": "Open alerts", "action": "sentinel-action list"},
-  "sentinel.status": {"icon": "󰋼", "label": "Status", "action": "sentinel-action status"},
-  "sentinel.inventory": {"icon": "󰮗", "label": "Inventory now", "action": "sentinel-scout --refresh"},
-  "sentinel.pause": {"icon": "󰏤", "label": "Pause 1h", "action": "sentinel-action pause 1h"}
+  "sentinel.alerts": {"icon": "󰀪", "label": "Open alerts", "action": "omarchy-launch-floating-terminal-with-presentation sentinel-action list"},
+  "sentinel.status": {"icon": "󰋼", "label": "Status", "action": "omarchy-launch-floating-terminal-with-presentation sentinel-action status"},
+  "sentinel.inventory": {"icon": "󰮗", "label": "Inventory now", "action": "omarchy-launch-floating-terminal-with-presentation sentinel-scout --refresh"},
+  "sentinel.pause": {"icon": "󰏤", "label": "Pause 1h", "action": "omarchy-launch-floating-terminal-with-presentation sentinel-action pause 1h"}
 }
