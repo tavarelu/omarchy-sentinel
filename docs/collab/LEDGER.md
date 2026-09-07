@@ -20,9 +20,9 @@ Updated by Chief only. Grok reads it; Grok never edits it.
 | W3-02 | One alert per process instance, safe kill, store hygiene | accepted (Chief implemented) `72031f6` | feature | reports/W3-02-report.md | pending Grok review (inline) |
 | W3-03 | Scout v2 | written; revised 2026-09-06 after the squad review (extends `vendors.py` from W3-05, runs after it) | | | |
 | W3-04 | Wire R-CHILD-SHELL | written; revised 2026-09-06 (two-pass sampler; child argv redacted, URL-stripped and bounded); after W3-05 | | | |
-| W3-05 | Vendor bypass table, install truth, click path | written; revised 2026-09-06 (PATH re-measured, install truth re-argued, owns `vendors.py` and `redact_argv`); first in the queue | | | |
+| W3-05 | Vendor bypass table, install truth, click path | accepted, merged 2026-09-07 (3e7d6b0 via merge; 267 green on the branch) | agents/W3-05 | reports/W3-05-report.md | Chief READY. R-BYPASS-CONFIG (REQ-9..11) deferred to W3-03 on the lead's argument (scout.py collision, Summarize ALLOWED_KEYS exposure). Owner before any live redeploy: extract_bypass_flags fingerprint drift can invalidate existing approvals (~95 on the Owner's machine); omarchy-menu-sentinel.jsonc wraps all four rows, two block on a keypress. shellcheck absent here: 2 honest skips. |
 | W3-06 | Docs truth (Chief) | in progress | | | |
-| W3-07 | Self-defense: tamper evidence (security review S1) | written; revised 2026-09-06 (pause cap confirmed by the Owner 2026-09-06: an over-cap pause is not a pause; control socket hardened) | | | |
+| W3-07 | Self-defense: tamper evidence (security review S1) | accepted, merged 2026-09-07 (12b8b33 via merge; joint gate w3-07 opened in b8fe9e8) | agents/W3-07 | reports/W3-07-report.md | Chief READY. ASK-1 pause-over-cap = high + sticky (matches the Owner's decision); ASK-2 R-SELF sticky events exempt from the allowlist gate (approved). One-line acceptance fixture clock fix accepted. Not done: health.py writer not announced; control socket fd only closed in run(). |
 | UX-00 | Hotfix: transient directory churn silent; directory events not writes | accepted, live | feature | | zero alerts from 5 lock-dir cycles against the running daemon |
 | UX-01 | Notify policy and burst mode | accepted (Chief implemented after the Grok cancellation) `af74d16`, live-proven 15:18 | feature | reports/UX-01-report.md | 5 toasts + 1 updating summary, all cleared at 30 s |
 | UX-02a | Investigate v2 and open-folder | accepted (Grok wrote `964c461`, Chief fixed `743dee3`), merged `0e1fe2e`, deployed live 2026-09-06 01:20 | grok/UX-02a | reports/UX-02a-report.md | Chief READY; ASK-1 and ASK-2 open |
@@ -30,7 +30,7 @@ Updated by Chief only. Grok reads it; Grok never edits it.
 | UX-03 | Panel v2 | done `48b2eeb`, live-smoked 02:24 (chips, folder icons, wrapped legend); card actions await alerts | feature | | screenshot sent to Owner |
 | UX-04 | Risk visual canvas | published: https://claude.ai/code/artifact/036d35ed-efe5-4160-9bc0-f795721291f8 | | | D-008 DECIDED 2026-09-06: bar with SAFE / CAUTION / DO NOT INSTALL bands |
 | W5-03 | Omarchy plugin (pulled forward) | scaffold live-smoked 2026-09-05: bar count, panel, cards, Dismiss round trip; three bugs fixed; shell restart required after QML edits | feature | | Owner saw screenshots |
-| W6-01a | Scanner core | written; revised 2026-09-06 (sanitized report, streamed `tree_hash`, transient-service sandbox verified on this machine, protocol sections added) | | | |
+| W6-01a | Scanner core | accepted, merged 2026-09-07 (2dd8585 via merge; scans/ R-SELF false positive fixed by the Chief in f6aa9d3) | agents/W6-01a | reports/W6-01a-report.md | Chief READY. Accepted: top[].title from pattern, 13-field ScanResult (sandbox), content-based tree_hash per packet text (plan doc section 4 to be corrected by W3-06). W6-01b owns the investigate evidence adapter. |
 | TEST-02 | Black-box acceptance suite (Grok, sole author) | accepted, merged `99a01c2` 2026-09-06: 19 tests salvaged from the cancelled grok/TEST-02 run | grok/TEST-02 | reports/TEST-02-report.md | Chief READY; 229 green on the merged branch |
 
 States: written, running, reported, returned, accepted, escalated.
