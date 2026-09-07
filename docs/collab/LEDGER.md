@@ -22,7 +22,7 @@ Updated by Chief only. Grok reads it; Grok never edits it.
 | W3-04 | Wire R-CHILD-SHELL | written; revised 2026-09-06 (two-pass sampler; child argv redacted, URL-stripped and bounded); after W3-05 | | | |
 | W3-05 | Vendor bypass table, install truth, click path | written; revised 2026-09-06 (PATH re-measured, install truth re-argued, owns `vendors.py` and `redact_argv`); first in the queue | | | |
 | W3-06 | Docs truth (Chief) | in progress | | | |
-| W3-07 | Self-defense: tamper evidence (security review S1) | written; revised 2026-09-06 (pause cap decided: an over-cap pause is not a pause, Owner may override; control socket hardened) | | | |
+| W3-07 | Self-defense: tamper evidence (security review S1) | written; revised 2026-09-06 (pause cap confirmed by the Owner 2026-09-06: an over-cap pause is not a pause; control socket hardened) | | | |
 | UX-00 | Hotfix: transient directory churn silent; directory events not writes | accepted, live | feature | | zero alerts from 5 lock-dir cycles against the running daemon |
 | UX-01 | Notify policy and burst mode | accepted (Chief implemented after the Grok cancellation) `af74d16`, live-proven 15:18 | feature | reports/UX-01-report.md | 5 toasts + 1 updating summary, all cleared at 30 s |
 | UX-02a | Investigate v2 and open-folder | accepted (Grok wrote `964c461`, Chief fixed `743dee3`), merged `0e1fe2e`, deployed live 2026-09-06 01:20 | grok/UX-02a | reports/UX-02a-report.md | Chief READY; ASK-1 and ASK-2 open |
