@@ -1,5 +1,5 @@
 # W6-01a report
-Branch: agents/W6-01a   Commits: (see below, filled in after commit)   Tests: 269 passed / 1 skipped, 0 failed (from `.venv/bin/pytest -q`; baseline before this packet was 229 passed / 1 skipped)
+Branch: agents/W6-01a   Commits: 16bf3ee   Tests: 269 passed / 1 skipped, 0 failed (from `.venv/bin/pytest -q`; baseline before this packet was 229 passed / 1 skipped)
 
 ## Done
 - `src/sentinel/scan.py` (new): `ScanResult` (frozen dataclass, 13 fields — see Deviations for the added `sandbox` field), `parse_report`, `severity_for`, `sanitize_report`, `tree_hash`/`TreeHashResult`, `build_sandbox_argv`, `resolve_scanner_binary`, `scan_report_path`, `run_scan`, `ScannerNotInstalled`. This is the only module that opens files under a scanned root or shells out to the scanner; nothing else in `src/sentinel/` imports it.
