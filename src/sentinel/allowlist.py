@@ -30,14 +30,18 @@ def fingerprint(
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def _allowlist_path() -> Path:
+def allowlist_path() -> Path:
     return state_dir() / ALLOWLIST_FILENAME
 
 
-def _session_path() -> Path:
+def session_path() -> Path:
     # Session approvals must cross the process boundary between sentinel-action
     # and the daemon, so they live in a file the daemon deletes on startup.
     return state_dir() / SESSION_FILENAME
+
+
+_allowlist_path = allowlist_path  # internal aliases kept for readability below
+_session_path = session_path
 
 
 def _load_file(path: Path) -> dict[str, dict[str, Any]]:

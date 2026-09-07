@@ -23,6 +23,7 @@ import time
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -37,8 +38,9 @@ MAX_TIMEOUT_MS = 30_000  # the shell's cap for non-critical toasts
 SUMMARY_MAX_CHARS = 80
 
 # Tamper alerts must never be mutable by anything that runs as the user, so
-# this set is code, not config.
-STICKY_EVENTS = frozenset({"foreign-write", "alert-log-truncated"})
+# this set is code, not config. pause-over-cap (W3-07) joins the original two:
+# a mute attempt must be loud, not silent, so it too ignores pause/prefs/burst.
+STICKY_EVENTS = frozenset({"foreign-write", "alert-log-truncated", "pause-over-cap"})
 
 
 @dataclass(frozen=True)
@@ -399,6 +401,7 @@ class Notifier:
         prefs_ok: Callable[[Path], bool] = lambda p: True,
         on_state_write: Callable[[Path], None] = lambda p: None,
         paused: Callable[[], bool] | None = None,
+        wall_clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self.policy = policy if policy is not None else NotifyPolicy()
         # Resolved at call time so tests (and W3-05) can swap the module hooks.
@@ -410,6 +413,10 @@ class Notifier:
         self._prefs_ok = prefs_ok
         self._on_state_write = on_state_write
         self._paused = paused
+        # Real wall-clock time by default -- unrelated to `clock` above (a
+        # float monotonic/test clock used only for BurstTracker windows) and
+        # unrelated to `paused` (an override that skips is_paused() entirely).
+        self._wall_clock = wall_clock
         self._prefs_cache: tuple[int, dict[str, bool] | None] | None = None
         self._tracker: BurstTracker | None = None
 
@@ -424,7 +431,7 @@ class Notifier:
         return run(argv) if self._runner is None else self._runner(argv)
 
     def _is_paused(self) -> bool:
-        return is_paused() if self._paused is None else self._paused()
+        return is_paused(now=self._wall_clock()) if self._paused is None else self._paused()
 
     def _tracker_(self) -> BurstTracker:
         if self._tracker is None:

@@ -182,7 +182,7 @@ def test_daemon_emit_drives_notifier_with_wall_clock(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     r = Runner()
     monkeypatch.setattr(notify, "run", r)
-    monkeypatch.setattr("sentinel.notify.is_paused", lambda: False)
+    monkeypatch.setattr("sentinel.notify.is_paused", lambda now=None: False)
     t = [datetime(2026, 9, 5, tzinfo=timezone.utc)]
     d = Daemon({"inotify": False, "wall_clock": lambda: t[0]})
     for i in range(6):

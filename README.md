@@ -78,3 +78,9 @@ How this project is built, by a design agent and a developer agent under one hum
 ## Security
 
 Sentinel is a visibility and decision tool, not a sandbox. It cannot stop a process that has already escalated to root, and a skill or plugin that passed a scanner can still misbehave until Sentinel sees it act. Pair it with a pre-install scanner such as NVIDIA SkillSpector and, when you need containment, a sandbox. Report vulnerabilities privately; a SECURITY.md with the disclosure address ships with v0.1.
+
+### Self-defense: tamper evidence, not prevention
+
+Every stored alert is mirrored, append-only, to the systemd user journal (`journalctl --user -t sentinel`), so an agent that rewrites `alerts.jsonl` cannot erase the record. A write to any of Sentinel's own state files that Sentinel itself did not make -- or announce over its local control socket -- raises a sticky R-SELF alert that ignores pause, per-severity prefs, and burst summarization. `sentinel-action pause` is capped at 24 h (`[notify] pause_max`); a `pause_until` written beyond the cap, however it got there, is treated as invalid and raises its own sticky alert instead of silently muting Sentinel.
+
+None of this is prevention. Any same-uid process -- exactly the adversary Sentinel watches for -- can forge a correctly-hashed announcement over the control socket and be classified "ours". What it cannot do is make that forgery invisible: every announcement is received with `SO_PASSCRED` and mirrored to the journal with the sender's pid (`SENTINEL_EVENT=cli-announce`), so a forged announcement still leaves a trail pointing at the process that sent it. Sandboxing an agent so it cannot touch Sentinel's state at all is a separate, future goal (W6-05), not this one.

@@ -55,7 +55,13 @@ RULE_TEXT: dict[str, str] = {
 }
 
 _SELF_EVENT_KINDS = frozenset(
-    {"IN_DELETE_SELF", "IN_MOVE_SELF", "foreign-write", "alert-log-truncated"}
+    {
+        "IN_DELETE_SELF",
+        "IN_MOVE_SELF",
+        "foreign-write",
+        "alert-log-truncated",
+        "pause-over-cap",
+    }
 )
 
 

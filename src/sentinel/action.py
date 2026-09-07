@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -12,7 +13,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sentinel.allowlist import SCOPES, approve, fingerprint
+from sentinel.allowlist import SCOPES, allowlist_path, approve, fingerprint, session_path
 from sentinel.fsutil import write_private_atomic
 from sentinel.keys import alert_flag_set, approval_prefix
 from sentinel.investigate import action_lines, page_detail
@@ -24,9 +25,11 @@ from sentinel.kill import (
 )
 from sentinel.models import Alert
 from sentinel.paths import default_config_path, state_dir
-from sentinel.store import find_alert, iter_alerts, update_alert_status
+from sentinel.statewatch import announce_write, sha256_file
+from sentinel.store import alerts_path, find_alert, iter_alerts, update_alert_status
 
 PAUSE_FILENAME = "pause_until"
+DEFAULT_PAUSE_MAX = timedelta(hours=24)
 COMMANDS = frozenset(
     {
         "approve",
@@ -68,11 +71,58 @@ def parse_duration(text: str) -> timedelta:
     return timedelta(days=n)
 
 
+def _announce(path: Path) -> None:
+    """Tell the daemon this file's just-written content is ours (best-effort;
+    an announce failure must never break the CLI action itself)."""
+    digest = sha256_file(path)
+    if digest is None:
+        return
+    try:
+        announce_write(path, digest)
+    except Exception:
+        return
+
+
 def write_pause(duration: timedelta, now: datetime | None = None) -> datetime:
     when = now if now is not None else _now()
     until = when + duration
-    write_private_atomic(pause_until_path(), until.isoformat() + "\n")
+    text = until.isoformat() + "\n"
+    path = pause_until_path()
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    try:
+        announce_write(path, digest)  # pre-write announce (R7)
+    except Exception:
+        pass
+    write_private_atomic(path, text)
+    try:
+        announce_write(path, digest)  # post-write announce (R7)
+    except Exception:
+        pass
     return until
+
+
+def load_pause_max(config_path: Path | None = None) -> timedelta:
+    """[notify].pause_max (default 24h). Kept independent of notify.load_policy
+    so the config-template round-trip test (which asserts load_policy(path) ==
+    NotifyPolicy()) is undisturbed by this key."""
+    path = config_path if config_path is not None else default_config_path()
+    if not Path(path).is_file():
+        return DEFAULT_PAUSE_MAX
+    try:
+        with Path(path).open("rb") as f:
+            data = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return DEFAULT_PAUSE_MAX
+    section = data.get("notify")
+    if not isinstance(section, dict):
+        return DEFAULT_PAUSE_MAX
+    raw = section.get("pause_max")
+    if not isinstance(raw, str):
+        return DEFAULT_PAUSE_MAX
+    try:
+        return parse_duration(raw)
+    except ValueError:
+        return DEFAULT_PAUSE_MAX
 
 
 def read_pause_until() -> datetime | None:
@@ -95,13 +145,17 @@ def read_pause_until() -> datetime | None:
 
 
 def is_paused(now: datetime | None = None) -> bool:
-    """True while state_dir()/pause_until is in the future. Notify should skip."""
+    """True while state_dir()/pause_until is in the future and within
+    pause_max of `now` (W3-07): a pause further out than the cap is not a
+    pause -- one file write must not silence Sentinel indefinitely."""
     until = read_pause_until()
     if until is None:
         return False
     when = now if now is not None else _now()
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
+    if until - when > load_pause_max():
+        return False
     return when < until
 
 
@@ -152,6 +206,19 @@ def confirm_kill(*, yes: bool, session: bool, precious: bool) -> bool:
     return kill_confirm(yes=yes, session=session, precious=precious)
 
 
+def _announce_allowlist() -> None:
+    """approve() may write allowlist.json, allowlist-session.json, or both."""
+    _announce(allowlist_path())
+    _announce(session_path())
+
+
+def _set_status(alert_id: str, status: str) -> None:
+    """update_alert_status rewrites alerts.jsonl whole; announce the result so
+    the daemon's ledger sees this as our own write, not tamper."""
+    update_alert_status(alert_id, status)
+    _announce(alerts_path())
+
+
 def cmd_approve(alert_id: str, scope: str) -> int:
     try:
         alert = get_alert(alert_id)
@@ -164,7 +231,8 @@ def cmd_approve(alert_id: str, scope: str) -> int:
     prefix = approval_prefix(alert, scope)
     fp = fingerprint(alert.rule, alert.basename, alert_flag_set(alert), prefix)
     approve(fp, scope, prefix)  # type: ignore[arg-type]
-    update_alert_status(alert.id, "approved")
+    _announce_allowlist()
+    _set_status(alert.id, "approved")
     print(f"approved {alert.id} scope={scope} prefix={prefix or '(any)'}")
     return 0
 
@@ -175,7 +243,7 @@ def cmd_dismiss(alert_id: str) -> int:
     except KeyError:
         print(f"unknown alert: {alert_id}", file=sys.stderr)
         return 1
-    update_alert_status(alert_id, "dismissed")
+    _set_status(alert_id, "dismissed")
     print(f"dismissed {alert_id}")
     return 0
 
@@ -187,7 +255,7 @@ def cmd_investigate(alert_id: str) -> int:
         return 1
     line_no, alert = found
     page_detail(alert, line_no=line_no)
-    update_alert_status(alert.id, "investigated")
+    _set_status(alert.id, "investigated")
     return 0
 
 
@@ -311,6 +379,13 @@ def cmd_pause(duration: str) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    cap = load_pause_max()
+    if delta > cap:
+        print(
+            f"refusing: {duration} exceeds the configured pause cap of {cap}",
+            file=sys.stderr,
+        )
+        return 2
     until = write_pause(delta, now=_now())
     print(f"paused until {until.isoformat()}")
     return 0
@@ -372,6 +447,7 @@ def cmd_notify(severities: list[str], *, reset: bool = False, as_json: bool = Fa
             print(str(exc), file=sys.stderr)
             return 1
         write_prefs(flags)
+        _announce(prefs_path())
     policy = load_policy()
     prefs = load_prefs() or {}
     eff = effective_policy(policy, prefs)
@@ -479,7 +555,7 @@ def cmd_kill(alert_id: str, *, session: bool, yes: bool, force_stale: bool = Fal
         return 1
     print("killing pids: " + (", ".join(str(p) for p in plan) if plan else "(none)"))
     execute_kill(plan)
-    update_alert_status(alert.id, "killed")
+    _set_status(alert.id, "killed")
     print(f"killed {alert.id}")
     return 0
 

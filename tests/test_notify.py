@@ -211,10 +211,48 @@ def test_build_argv_default_policy_matches_severity():
     assert build_argv(sticky)[3:5] == ["-u", "critical"]
 
 
+def test_is_paused_uses_injected_wall_clock(tmp_path):
+    t0 = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    write_pause(timedelta(hours=1), now=t0)
+
+    calls_inside: list[list[str]] = []
+    n_inside = Notifier(
+        runner=lambda argv: calls_inside.append(argv),
+        state_path=tmp_path / "burst-in.json",
+        prefs_file=tmp_path / "prefs-in.json",
+        wall_clock=lambda: t0 + timedelta(minutes=30),  # inside the pause window
+    )
+    n_inside.send(_alert())
+    assert calls_inside == []  # paused, per the injected wall clock (not the real one)
+
+    calls_outside: list[list[str]] = []
+    n_outside = Notifier(
+        runner=lambda argv: calls_outside.append(argv),
+        state_path=tmp_path / "burst-out.json",
+        prefs_file=tmp_path / "prefs-out.json",
+        wall_clock=lambda: t0 + timedelta(hours=2),  # outside the pause window
+    )
+    n_outside.send(_alert())
+    assert len(calls_outside) == 1  # not paused, per the injected wall clock
+
+
+def test_sticky_pause_over_cap_bypasses_pause_like_other_sticky_events(tmp_path):
+    n, calls = _notifier(tmp_path, paused=lambda: True)
+    a = _alert(
+        rule="R-SELF",
+        summary="pause_until exceeds the configured pause cap",
+        evidence={"event": "pause-over-cap", "until": "2099-01-01T00:00:00+00:00"},
+    )
+    n.send(a)
+    assert len(calls) == 1
+    assert calls[0][3:5] == ["-u", "critical"]
+    assert "-t" not in calls[0]
+
+
 def test_send_alert_module_entry_point(monkeypatch, tmp_path):
     calls: list = []
     monkeypatch.setattr(notify, "run", lambda argv: calls.append(argv) or "1\n")
     monkeypatch.setattr(notify, "_default", None)
-    monkeypatch.setattr("sentinel.notify.is_paused", lambda: False)
+    monkeypatch.setattr("sentinel.notify.is_paused", lambda now=None: False)
     notify.send_alert(_alert())
     assert len(calls) == 1 and calls[0][0:3] == ["omarchy", "notification", "send"]

@@ -20,3 +20,8 @@ burst_threshold = 5     # individual toasts inside burst_window before one summa
 burst_window = 300      # seconds
 burst_quiet = 600       # seconds without a toast before the burst resets
 plugin_id = "tav.sentinel"   # the panel a summary toast opens
+
+# W3-07 self-defense: a pause longer than this is not a pause. `sentinel-action
+# pause` refuses a longer duration (exit 2); a pause_until beyond the cap --
+# however it got there -- is treated as invalid and raises a sticky R-SELF.
+pause_max = "24h"
