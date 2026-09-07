@@ -19,7 +19,7 @@ def _alert(**overrides) -> Alert:
         exe="/usr/bin/claude",
         basename="claude",
         cmdline=["claude", "--dangerously-skip-permissions"],
-        cwd="/home/tav/Work/scratch",
+        cwd="/home/user/Work/scratch",
         evidence={
             "flag": "--dangerously-skip-permissions",
             "flags": ["--dangerously-skip-permissions"],
@@ -172,12 +172,12 @@ def test_kill_refuses_without_yes_when_not_tty(monkeypatch, tmp_path):
 
 def test_kill_session_precious_refuses_yes_without_tty(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
-    alert = _alert(cwd="/home/tav/Work/prod")
+    alert = _alert(cwd="/home/user/Work/prod")
     append_alert(alert)
     executed: list[list[int]] = []
     monkeypatch.setattr(
         "sentinel.action.load_precious_worktrees",
-        lambda: ["/home/tav/Work/prod"],
+        lambda: ["/home/user/Work/prod"],
     )
     monkeypatch.setattr("sentinel.action.plan_kill", lambda *a, **k: [100, 101])
     monkeypatch.setattr(
@@ -192,12 +192,12 @@ def test_kill_session_precious_refuses_yes_without_tty(monkeypatch, tmp_path):
 
 def test_kill_child_yes_allowed_on_precious(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
-    alert = _alert(cwd="/home/tav/Work/prod")
+    alert = _alert(cwd="/home/user/Work/prod")
     append_alert(alert)
     executed: list[list[int]] = []
     monkeypatch.setattr(
         "sentinel.action.load_precious_worktrees",
-        lambda: ["/home/tav/Work/prod"],
+        lambda: ["/home/user/Work/prod"],
     )
     monkeypatch.setattr("sentinel.action.plan_kill", lambda *a, **k: [101])
     monkeypatch.setattr(
@@ -599,11 +599,11 @@ def test_menu_interactive_kill_session_precious_still_requires_tty_phrase(monkey
     # leak into kill.confirm_kill's separate tty/phrase gate — selecting "6"
     # is never sufficient consent to kill a precious worktree on its own.
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
-    alert = _alert(cwd="/home/tav/Work/prod")
+    alert = _alert(cwd="/home/user/Work/prod")
     append_alert(alert)
     monkeypatch.setattr(
         "sentinel.action.load_precious_worktrees",
-        lambda: ["/home/tav/Work/prod"],
+        lambda: ["/home/user/Work/prod"],
     )
     executed: list[list[int]] = []
     monkeypatch.setattr("sentinel.action.plan_kill", lambda *a, **k: [100, 101])

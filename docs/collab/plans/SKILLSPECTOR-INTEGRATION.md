@@ -82,7 +82,7 @@ The daemon's only new responsibilities: enqueue, and spawn the runner with `subp
   "rule": "R-NEW-AGENT",
   "severity": "high | medium | low",
   "summary": "new plugin hookify: SkillSpector score 72, DO NOT INSTALL",
-  "paths": ["/home/tav/.claude/plugins/marketplaces/claude-plugins-official/plugins/hookify"],
+  "paths": ["~/.claude/plugins/marketplaces/claude-plugins-official/plugins/hookify"],
   "hashes": {"tree": "sha256:…", "marker": "sha256:…"},
   "evidence": {
     "kind": "plugin",
@@ -93,7 +93,7 @@ The daemon's only new responsibilities: enqueue, and spawn the runner with `subp
       "risk_score": 72, "verdict": "DO NOT INSTALL",
       "counts": {"critical": 1, "high": 2, "medium": 3, "low": 5},
       "top": [{"id": "EX-002", "severity": "high", "title": "curl to external host in hook", "file": "hooks/stop-hook.sh", "line": 14}],
-      "report": "/home/tav/.local/state/sentinel/scans/<hash>.json",
+      "report": "~/.local/state/sentinel/scans/<hash>.json",
       "duration_ms": 4120
     }
   }

@@ -8,7 +8,7 @@ Approve suppresses exactly what the user approved, for every rule, with the four
 1. `cmd_approve` keys the fingerprint on `alert.cwd` (`src/sentinel/action.py:168`), which is the empty string for R-HOOK-WRITE and R-SELF alerts.
 2. The daemon derives the location from `alert.cwd or alert.paths[0]` (`src/sentinel/daemon.py:265`) and tests fingerprints for that path and every parent (`daemon.py:271-276`). It never tests the empty prefix when paths exist, so an approval keyed on `""` can never match a write alert.
 3. Reproduction on 2026-09-04 (scratch XDG dirs): approve a real R-HOOK-WRITE alert with scope forever, then `_is_alert_allowed` on an identical alert returns `False`.
-4. `forever` approval from `/home/tav/Work/scratch/sub` allows `/home/tav/Work/scratch/sub/deeper`, does not allow `/home/tav/Work/scratch`, does not allow `/home/tav/Other`. So forever is subtree-bound and this-repo does not reach the repo root when the alert came from a subdirectory.
+4. `forever` approval from `~/Work/scratch/sub` allows `~/Work/scratch/sub/deeper`, does not allow `~/Work/scratch`, does not allow `~/Other`. So forever is subtree-bound and this-repo does not reach the repo root when the alert came from a subdirectory.
 5. `_entry_allows` (`src/sentinel/allowlist.py:66`) only checks cwd for `this-repo`; the cwd restriction for the other scopes comes from the fingerprint itself embedding `cwd_prefix`.
 6. `R-ALLOW-EXPIRE` (spec section 8, low severity) is not implemented anywhere: `grep -rn "R-ALLOW-EXPIRE" src/` is empty.
 

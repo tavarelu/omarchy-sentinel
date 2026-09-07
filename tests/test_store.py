@@ -11,7 +11,7 @@ def test_append_and_read_alert(monkeypatch, tmp_path):
         exe="/usr/bin/claude",
         basename="claude",
         cmdline=["claude", "--dangerously-skip-permissions"],
-        cwd="/home/tav/Work/scratch",
+        cwd="/home/user/Work/scratch",
         evidence={"flag": "bypassPermissions"},
     )
     append_alert(a)

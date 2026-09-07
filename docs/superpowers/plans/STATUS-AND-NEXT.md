@@ -4,7 +4,7 @@
 
 **Date:** 2026-09-03 (paused for token/usage risk)  
 **Branch:** `feature/omarchy-sentinel`  
-**Worktree:** `/home/tav/Work/sentinel/.worktrees/omarchy-sentinel`  
+**Worktree:** `~/Work/sentinel/.worktrees/omarchy-sentinel`  
 **Last Chief-reviewed commit:** `4ebfb5d` — pause gates notify + flap toast  
 **Later unreviewed commits:** `e0f2c86` T12, `30533f6` T14, `c015834` T13 (landed; **not** R&D-audited)  
 **Working tree:** clean except this STATUS file. Pytest **116 passed** at snapshot.

@@ -255,11 +255,11 @@ Deferred: `R-TIMER-NEW`, Falco host rules, sandbox escapes.
   "exe": "/usr/bin/claude",
   "basename": "claude",
   "cmdline": ["claude", "--dangerously-skip-permissions"],
-  "cwd": "/home/tav/Work/scratch",
+  "cwd": "~/Work/scratch",
   "parent": {"pid": 1200, "exe": "foot"},
-  "paths": ["/home/tav/.claude/settings.json"],
+  "paths": ["~/.claude/settings.json"],
   "writer_pid": null,
-  "hashes": {"/home/tav/.claude/settings.json": "sha256:…"},
+  "hashes": {"~/.claude/settings.json": "sha256:…"},
   "evidence": {"flag": "bypassPermissions"},
   "status": "open"
 }

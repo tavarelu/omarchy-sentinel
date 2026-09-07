@@ -20,7 +20,7 @@ def _alert(**overrides) -> Alert:
         exe="/usr/bin/claude",
         basename="claude",
         cmdline=["claude", "--print"],
-        cwd="/home/tav/Work/scratch",
+        cwd="/home/user/Work/scratch",
         evidence={
             "flag": "settings-write",
             "token": "sk-secret-should-not-appear",
@@ -30,10 +30,10 @@ def _alert(**overrides) -> Alert:
             "access_token": "also-secret",
             "ok_meta": "safe",
         },
-        paths=["/home/tav/.claude/settings.json", "/home/tav/.claude/auth.json"],
+        paths=["/home/user/.claude/settings.json", "/home/user/.claude/auth.json"],
         hashes={
-            "/home/tav/.claude/settings.json": "sha256:abc",
-            "/home/tav/.claude/auth.json": "sha256:def",
+            "/home/user/.claude/settings.json": "sha256:abc",
+            "/home/user/.claude/auth.json": "sha256:def",
         },
         parent={"pid": 1, "exe": "foot", "token": "parent-secret"},
         writer_pid=99,
@@ -48,7 +48,7 @@ def test_format_detail_includes_core_fields():
     assert alert.rule in text
     assert " ".join(alert.cmdline) in text
     assert alert.cwd in text
-    assert "/home/tav/.claude/settings.json" in text
+    assert "/home/user/.claude/settings.json" in text
     assert "sha256:abc" in text
     assert "sha256:def" in text
     assert str(alert.writer_pid) in text
@@ -65,7 +65,7 @@ def test_format_detail_excludes_token_auth_body_keys():
     assert "parent-secret" not in text
     assert "leak" not in text
     # path names mentioning auth.json are metadata and must remain
-    assert "/home/tav/.claude/auth.json" in text
+    assert "/home/user/.claude/auth.json" in text
     assert "ok_meta" in text
     assert "safe" in text
 
@@ -265,7 +265,7 @@ def _allow_expire(**overrides) -> Alert:
 
 def _new_agent_scan(**overrides) -> Alert:
     report = "/tmp/skillspector-report.md"
-    root = "/home/tav/.claude/skills/new-skill"
+    root = "/home/user/.claude/skills/new-skill"
     data = dict(
         rule="R-NEW-AGENT",
         severity="medium",

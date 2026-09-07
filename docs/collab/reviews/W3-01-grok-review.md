@@ -9,7 +9,7 @@
 | 1 | CONFIRMED | Old `cmd_approve`: `fp = fingerprint(alert.rule, alert.basename, _flag_set(alert), alert.cwd)` then `approve(fp, scope, alert.cwd)`. |
 | 2 | CONFIRMED | Fix puts `""` first: `candidate_prefixes("/a/b/c")` → `["", "/a/b/c", "/a/b", "/a", "/"]` (`tests/test_keys.py` last test). Old path was location+parents only, so a `cwd=""` fingerprint could not match a write alert with paths. |
 | 3 | CONFIRMED | Report: pre-change `_is_alert_allowed` was `False`. Acceptance: `write-alert approved suppresses: True`. |
-| 4 | CONFIRMED | Report: pre-change deeper True, repo root False, `/home/tav/Work/scratch` False, `/home/tav/Other` False. After: `forever global: True` for `/a/b/c/d`, `/a/b`, `/x/y`. |
+| 4 | CONFIRMED | Report: pre-change deeper True, repo root False, `~/Work/scratch` False, `~/Other` False. After: `forever global: True` for `/a/b/c/d`, `/a/b`, `/x/y`. |
 | 5 | CONFIRMED | `approval_prefix` is `""` for `session`/`24h`/`forever` (`tests/test_keys.py` `test_approval_prefix_by_scope`); this-repo still goes through `_cwd_matches_prefix`. Other scopes are keyed by the fingerprint prefix, not a cwd check. |
 | 6 | CONFIRMED | Pre-change: no `R-ALLOW-EXPIRE` in `src/`. Now `test_24h_expiry_emits_allow_expire_once_then_normal` asserts rule `R-ALLOW-EXPIRE`, severity `low`, then the original `R-BYPASS` after delete. |
 

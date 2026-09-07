@@ -52,7 +52,7 @@ def _alert(**overrides) -> Alert:
         exe="/usr/bin/claude",
         basename="claude",
         cmdline=["claude", "--dangerously-skip-permissions"],
-        cwd="/home/tav/Work/scratch",
+        cwd="/home/user/Work/scratch",
         evidence={
             "flag": "--dangerously-skip-permissions",
             "flags": ["--dangerously-skip-permissions"],
@@ -62,9 +62,9 @@ def _alert(**overrides) -> Alert:
             "transcript": "user said hello",
         },
         parent={"pid": 1200, "exe": "/usr/bin/foot"},
-        paths=["/home/tav/.claude/settings.json"],
+        paths=["/home/user/.claude/settings.json"],
         writer_pid=9,
-        hashes={"/home/tav/.claude/settings.json": "sha256:abc"},
+        hashes={"/home/user/.claude/settings.json": "sha256:abc"},
     )
     data.update(overrides)
     return Alert.new(**data)
@@ -80,12 +80,12 @@ def test_build_redacted_bundle_only_allowed_keys():
     assert bundle["severity"] == "high"
     assert bundle["basename"] == "claude"
     assert bundle["flags"] == ["--dangerously-skip-permissions"]
-    assert bundle["cwd"] == "/home/tav/Work/scratch"
+    assert bundle["cwd"] == "/home/user/Work/scratch"
     assert bundle["parent_basename"] == "foot"
     assert bundle["paths"] == ["settings.json"] or bundle["paths"] == [
-        "/home/tav/.claude/settings.json"
+        "/home/user/.claude/settings.json"
     ]
-    assert bundle["hashes"] == {"/home/tav/.claude/settings.json": "sha256:abc"}
+    assert bundle["hashes"] == {"/home/user/.claude/settings.json": "sha256:abc"}
     assert bundle["writer_pid"] == 9
     blob = str(bundle)
     assert "sk-secret" not in blob

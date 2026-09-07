@@ -176,7 +176,7 @@ def test_append_and_read_alert(monkeypatch, tmp_path):
         exe="/usr/bin/claude",
         basename="claude",
         cmdline=["claude", "--dangerously-skip-permissions"],
-        cwd="/home/tav/Work/scratch",
+        cwd="~/Work/scratch",
         evidence={"flag": "bypassPermissions"},
     )
     append_alert(a)
@@ -220,10 +220,10 @@ Do **not** include fields for file bodies or tokens.
 def test_this_repo_scope_matches_prefix_only(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     from sentinel.allowlist import fingerprint, approve, is_allowed
-    fp = fingerprint("R-BYPASS", "claude", frozenset(["--dangerously-skip-permissions"]), "/home/tav/Work/scratch")
-    approve(fp, "this-repo", "/home/tav/Work/scratch")
-    assert is_allowed(fp, "/home/tav/Work/scratch/pkg") is True
-    assert is_allowed(fp, "/home/tav/Work/prod") is False
+    fp = fingerprint("R-BYPASS", "claude", frozenset(["--dangerously-skip-permissions"]), "~/Work/scratch")
+    approve(fp, "this-repo", "~/Work/scratch")
+    assert is_allowed(fp, "~/Work/scratch/pkg") is True
+    assert is_allowed(fp, "~/Work/prod") is False
 ```
 
 Also test `24h` expiry (freeze time with a `now=` argument) and `session` cleared by `clear_session()`.

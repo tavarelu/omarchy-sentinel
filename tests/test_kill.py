@@ -144,20 +144,20 @@ def test_plan_kill_default_mode_is_child():
 
 
 def test_cwd_is_precious_matches_prefix_and_nested():
-    prefixes = ["/home/tav/Work/prod"]
-    assert cwd_is_precious("/home/tav/Work/prod", prefixes)
-    assert cwd_is_precious("/home/tav/Work/prod/src", prefixes)
-    assert not cwd_is_precious("/home/tav/Work/scratch", prefixes)
-    assert not cwd_is_precious("/home/tav/Work/prod2", prefixes)
-    assert not cwd_is_precious("/home/tav/Work/prod", [])
+    prefixes = ["/home/user/Work/prod"]
+    assert cwd_is_precious("/home/user/Work/prod", prefixes)
+    assert cwd_is_precious("/home/user/Work/prod/src", prefixes)
+    assert not cwd_is_precious("/home/user/Work/scratch", prefixes)
+    assert not cwd_is_precious("/home/user/Work/prod2", prefixes)
+    assert not cwd_is_precious("/home/user/Work/prod", [])
     assert not cwd_is_precious("", prefixes)
 
 
 def test_session_kill_requires_confirm_on_precious_prefix():
-    prefixes = ["/home/tav/Work/prod"]
-    assert session_kill_requires_confirm("/home/tav/Work/prod/app", prefixes)
-    assert not session_kill_requires_confirm("/home/tav/Work/scratch", prefixes)
-    assert not session_kill_requires_confirm("/home/tav/Work/prod", [])
+    prefixes = ["/home/user/Work/prod"]
+    assert session_kill_requires_confirm("/home/user/Work/prod/app", prefixes)
+    assert not session_kill_requires_confirm("/home/user/Work/scratch", prefixes)
+    assert not session_kill_requires_confirm("/home/user/Work/prod", [])
 
 
 def test_confirm_kill_session_precious_needs_typed_phrase():

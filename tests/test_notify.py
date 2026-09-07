@@ -24,7 +24,7 @@ from sentinel.notify import (
 )
 
 
-def _alert(severity="high", rule="R-BYPASS", summary="claude started with --yolo", evidence=None, cwd="/home/tav/Work/scratch"):
+def _alert(severity="high", rule="R-BYPASS", summary="claude started with --yolo", evidence=None, cwd="/home/user/Work/scratch"):
     return Alert.new(
         rule=rule,
         severity=severity,

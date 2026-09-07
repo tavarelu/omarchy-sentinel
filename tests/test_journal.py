@@ -18,7 +18,7 @@ def _alert(**overrides) -> Alert:
         exe="",
         basename="",
         cmdline=[],
-        cwd="/home/tav/Work/scratch",
+        cwd="/home/user/Work/scratch",
         evidence={"event": "foreign-write", "path": "/p"},
     )
     data.update(overrides)
