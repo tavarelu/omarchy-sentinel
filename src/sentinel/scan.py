@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from sentinel.fsutil import ensure_private_dir, write_private_atomic
+from sentinel.statewatch import announce_write, sha256_bytes
 from sentinel.paths import state_dir
 
 # -- tree_hash tuning knobs (module attributes so tests can monkeypatch them
@@ -435,6 +436,27 @@ def scan_report_path(tree_digest: str) -> Path:
     return state_dir() / "scans" / f"{tree_digest}.json"
 
 
+def write_scan_report(dest: Path, sanitized: dict[str, Any]) -> str:
+    """Write the sanitized report and announce it to the daemon before and
+    after, so the write classifies as ours rather than as a foreign write to
+    Sentinel's own state (the daemon's control socket is announcement-only;
+    when it is not running the announce falls back to the startup nonce file).
+    Returns the content sha256."""
+    content = json.dumps(sanitized, indent=2, sort_keys=True) + "\n"
+    digest = sha256_bytes(content.encode("utf-8"))
+    ensure_private_dir(dest.parent)
+    try:
+        announce_write(dest, digest)
+    except Exception:
+        pass
+    write_private_atomic(dest, content)
+    try:
+        announce_write(dest, digest)
+    except Exception:
+        pass
+    return digest
+
+
 def run_scan(
     root: Path,
     *,
@@ -494,8 +516,7 @@ def run_scan(
     if isinstance(raw, dict):
         sanitized = sanitize_report(raw)
         dest = scan_report_path(th.digest)
-        ensure_private_dir(dest.parent)
-        write_private_atomic(dest, json.dumps(sanitized, indent=2, sort_keys=True) + "\n")
+        write_scan_report(dest, sanitized)
         report_path = str(dest)
 
     return dataclasses.replace(

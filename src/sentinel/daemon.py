@@ -70,7 +70,18 @@ OPERATIONAL_NAMES = frozenset(
         "notify-burst.json",
     }
 )
+SCANS_DIRNAME = "scans"
 PROCESS_RULES = frozenset({"R-BYPASS", "R-CHILD-SHELL"})
+
+
+def _is_scan_report(path: Path) -> bool:
+    """sentinel-scan reports live in state_dir()/scans/<tree-digest>.json.
+
+    They are Sentinel's own files written by a CLI, not the daemon, so they are
+    classified through the ledger (announced -> ours, else foreign) rather than
+    through evaluate_write, which would raise R-SELF for every scan.
+    """
+    return path.suffix == ".json" and path.parent == state_dir() / SCANS_DIRNAME
 _DELETED_SUFFIX = " (deleted)"
 
 # inotify_init1 flags share values with open(2).
@@ -579,7 +590,7 @@ class Daemon:
         writer_cmdline: Sequence[str] | None = None,
     ) -> None:
         path = Path(path)
-        if path.name in OPERATIONAL_NAMES:
+        if path.name in OPERATIONAL_NAMES or _is_scan_report(path):
             # Writer identity is unavailable from inotify and the ledger is a
             # more precise signal for Sentinel's own files, so these are
             # classified by content rather than skipped (W3-07 R9).

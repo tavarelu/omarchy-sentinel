@@ -795,3 +795,27 @@ def test_pause_30d_is_not_paused_and_raises_one_self_alert(tmp_path, monkeypatch
     d.handle_write(path)
     assert len(list(iter_alerts())) == 1
     assert action.is_paused(now=datetime.now(timezone.utc)) is False
+
+
+def test_scan_report_write_is_ours_when_announced_else_foreign(tmp_path, monkeypatch):
+    """state_dir()/scans/<digest>.json is written by sentinel-scan, not the daemon.
+    Announced content classifies as ours (no alert); the same path written
+    without an announcement is a foreign write to Sentinel's own state."""
+    from sentinel.statewatch import sha256_bytes
+
+    state = tmp_path / "state" / "sentinel"
+    scans = state / "scans"
+    scans.mkdir(parents=True)
+    d = _daemon(tmp_path, monkeypatch, self_paths=[state], watch_paths=[])
+    path = scans / "abc123.json"
+    content = "{}\n"
+    d._ledger.announce(path, sha256_bytes(content.encode("utf-8")))
+    path.write_text(content)
+    d.handle_write(path, writer_pid=1, writer_exe="/usr/bin/python3")
+    assert list(iter_alerts()) == []
+    path.write_text("{\"tampered\": true}\n")
+    d.handle_write(path, writer_pid=1, writer_exe="/usr/bin/python3")
+    rows = list(iter_alerts())
+    assert len(rows) == 1
+    assert rows[0].rule == "R-SELF"
+    assert rows[0].evidence == {"event": "foreign-write", "path": str(path)}

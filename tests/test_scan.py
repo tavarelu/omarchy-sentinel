@@ -560,3 +560,19 @@ def test_daemon_never_imports_scan_module():
 def test_pyproject_declares_sentinel_scan_entry_point():
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert data["project"]["scripts"]["sentinel-scan"] == "sentinel.cli:scan_main"
+
+
+def test_write_scan_report_announces_content_digest(tmp_path, monkeypatch):
+    import json
+    from sentinel import scan
+    from sentinel.statewatch import sha256_bytes
+
+    calls = []
+    monkeypatch.setattr(scan, "announce_write", lambda p, h: calls.append((p, h)))
+    dest = tmp_path / "scans" / "deadbeef.json"
+    digest = scan.write_scan_report(dest, {"issues": [], "suppressed": []})
+    content = dest.read_text()
+    assert json.loads(content) == {"issues": [], "suppressed": []}
+    assert digest == sha256_bytes(content.encode("utf-8"))
+    assert calls == [(dest, digest), (dest, digest)]
+    assert (dest.stat().st_mode & 0o777) == 0o600
