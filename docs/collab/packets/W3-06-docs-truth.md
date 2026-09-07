@@ -1,6 +1,6 @@
 # W3-06 Docs truth: ledger, status, review trail
 
-Depends on: nothing   Parallel-safe with: every code packet (docs only)
+Depends on: every other packet in the queue; runs last (it rewrites the ledger and roadmap rows each merge touches, so running it earlier guarantees conflicts)   Parallel-safe with: nothing
 
 ## Goal
 Every claim in the repository's documentation is true of the code as it stands, and a reader can tell what is

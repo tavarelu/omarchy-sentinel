@@ -1,7 +1,6 @@
 # UX-02b Evidence v2 capture
 
-Depends on: UX-02a (merged), W3-02 (merged)   Parallel-safe with: W3-05, W6-01a
-Blocked by (soft): W3-03 and W3-04 add fields this packet records; land after them if they are in flight.
+Depends on: UX-02a (merged), W3-02 (merged), W3-03, W3-04, W3-07 (this packet records fields those three create; it runs after they merge)   Parallel-safe with: W6-01a
 
 ## Goal
 Alerts carry enough recorded fact that `investigate` can cite a source for every line without re-reading the

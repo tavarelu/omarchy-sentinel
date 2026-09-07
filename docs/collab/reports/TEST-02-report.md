@@ -33,3 +33,14 @@ Branch: grok/TEST-02   Commits: pending   Tests: 229 passed / 0 failed (from `.v
 ## Self-review
 - reviewer: not run this turn (budget: finish suite, pytest, report, commit). Gaps to check: whether calling `open_argv`/`open_target` counts as asserting on internals.
 - auditor: not run this turn. Evidence from the suite itself: isolated XDG only; stub `omarchy` records argv; SECRET_BODY never appears in argv; no `src/` edits; no network; no `systemctl`/`sudo`/live-home writes.
+
+## Chief review (2026-09-06)
+- The grok client ended the run on a text-only turn after the suite was written; the Chief committed the
+  tree verbatim as `a337810` and merged it `--no-ff` as `99a01c2`. Re-run against the current feature
+  branch: 19 passed alone, 229 together with the unit suite.
+- Black-box discipline holds: the suite imports only public entry points (`action_main`, `Daemon`, `Alert`,
+  `open_argv`, `open_target`, `state_dir`), drives an isolated XDG tree with a stub `omarchy`, and never
+  reads `tests/`. Calling `open_argv` and `open_target` directly is a small step inside the box (the
+  self-review flagged it); accepted, because the end-to-end CLI path is also exercised through the stub
+  `uwsm-app`.
+- Asks: none filed. Verdict: READY.

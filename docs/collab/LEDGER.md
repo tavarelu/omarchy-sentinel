@@ -18,18 +18,20 @@ Updated by Chief only. Grok reads it; Grok never edits it.
 |----|-------|-------|--------|--------|---------|
 | W3-01 | Allowlist and Approve correctness | accepted, merged `cfd221c` | claude/W3-01 | reports/W3-01-report.md | Grok READY (reviews/W3-01-grok-review.md) |
 | W3-02 | One alert per process instance, safe kill, store hygiene | accepted (Chief implemented) `72031f6` | feature | reports/W3-02-report.md | pending Grok review (inline) |
-| W3-03 | Scout v2 | written | | | |
-| W3-04 | Wire R-CHILD-SHELL | written, waits for W3-02 | | | |
-| W3-05 | Vendor bypass table, install truth, click path | written | | | |
+| W3-03 | Scout v2 | written; revised 2026-09-06 after the squad review (extends `vendors.py` from W3-05, runs after it) | | | |
+| W3-04 | Wire R-CHILD-SHELL | written; revised 2026-09-06 (two-pass sampler; child argv redacted, URL-stripped and bounded); after W3-05 | | | |
+| W3-05 | Vendor bypass table, install truth, click path | written; revised 2026-09-06 (PATH re-measured, install truth re-argued, owns `vendors.py` and `redact_argv`); first in the queue | | | |
 | W3-06 | Docs truth (Chief) | in progress | | | |
-| W3-07 | Self-defense: tamper evidence (security review S1) | written | | | |
+| W3-07 | Self-defense: tamper evidence (security review S1) | written; revised 2026-09-06 (pause cap decided: an over-cap pause is not a pause, Owner may override; control socket hardened) | | | |
 | UX-00 | Hotfix: transient directory churn silent; directory events not writes | accepted, live | feature | | zero alerts from 5 lock-dir cycles against the running daemon |
 | UX-01 | Notify policy and burst mode | accepted (Chief implemented after the Grok cancellation) `af74d16`, live-proven 15:18 | feature | reports/UX-01-report.md | 5 toasts + 1 updating summary, all cleared at 30 s |
-| UX-02a | Investigate v2 and open-folder | packet written; next Grok run after UX-01 | | | |
-| UX-02b | Evidence v2 capture | planned, after W3-02/03/04 | | | |
+| UX-02a | Investigate v2 and open-folder | accepted (Grok wrote `964c461`, Chief fixed `743dee3`), merged `0e1fe2e`, deployed live 2026-09-06 01:20 | grok/UX-02a | reports/UX-02a-report.md | Chief READY; ASK-1 and ASK-2 open |
+| UX-02b | Evidence v2 capture | written; runs after W3-03, W3-04 and W3-07 merge | | | |
 | UX-03 | Panel v2 | done `48b2eeb`, live-smoked 02:24 (chips, folder icons, wrapped legend); card actions await alerts | feature | | screenshot sent to Owner |
 | UX-04 | Risk visual canvas | published: https://claude.ai/code/artifact/036d35ed-efe5-4160-9bc0-f795721291f8 | | | D-008 DECIDED 2026-09-06: bar with SAFE / CAUTION / DO NOT INSTALL bands |
 | W5-03 | Omarchy plugin (pulled forward) | scaffold live-smoked 2026-09-05: bar count, panel, cards, Dismiss round trip; three bugs fixed; shell restart required after QML edits | feature | | Owner saw screenshots |
+| W6-01a | Scanner core | written; revised 2026-09-06 (sanitized report, streamed `tree_hash`, transient-service sandbox verified on this machine, protocol sections added) | | | |
+| TEST-02 | Black-box acceptance suite (Grok, sole author) | accepted, merged `99a01c2` 2026-09-06: 19 tests salvaged from the cancelled grok/TEST-02 run | grok/TEST-02 | reports/TEST-02-report.md | Chief READY; 229 green on the merged branch |
 
 States: written, running, reported, returned, accepted, escalated.
 
