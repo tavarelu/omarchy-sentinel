@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -207,7 +208,26 @@ def cmd_summarize(alert_id: str) -> int:
     return 0
 
 
-def cmd_menu(alert_id: str) -> int:
+MENU_PROMPT_LINES: tuple[str, ...] = (
+    "1 approve session",
+    "2 approve 24h",
+    "3 approve this-repo",
+    "4 approve forever",
+    "5 kill child",
+    "6 kill session",
+    "7 investigate",
+    "8 summarize",
+    "9 dismiss",
+    "0 nothing",
+)
+
+
+def cmd_menu(
+    alert_id: str,
+    *,
+    isatty: bool | None = None,
+    prompt: Callable[[str], str] | None = None,
+) -> int:
     try:
         alert = get_alert(alert_id)
     except KeyError:
@@ -215,9 +235,47 @@ def cmd_menu(alert_id: str) -> int:
         return 1
     print(f"Alert {alert.id} [{alert.status}] {alert.severity} {alert.rule}")
     print(f"  {alert.summary}")
-    print("Actions:")
-    for line in action_lines(alert):
+    tty = sys.stdin.isatty() if isatty is None else isatty
+    if not tty:
+        print("Actions:")
+        for line in action_lines(alert):
+            print(line)
+        return 0
+    ask = input if prompt is None else prompt
+    for line in MENU_PROMPT_LINES:
         print(line)
+    choice = ask("> ").strip()
+    return _dispatch_menu_choice(alert.id, choice)
+
+
+def _dispatch_menu_choice(alert_id: str, choice: str) -> int:
+    """Route a numbered menu choice to the existing cmd_* functions.
+
+    Kill (5/6) still goes through cmd_kill -> confirm_kill: selecting a menu
+    number is never sufficient consent to kill on its own (no silent
+    auto-kill, AGENTS.md invariant 4).
+    """
+    if choice == "1":
+        return cmd_approve(alert_id, "session")
+    if choice == "2":
+        return cmd_approve(alert_id, "24h")
+    if choice == "3":
+        return cmd_approve(alert_id, "this-repo")
+    if choice == "4":
+        return cmd_approve(alert_id, "forever")
+    if choice == "5":
+        return cmd_kill(alert_id, session=False, yes=False)
+    if choice == "6":
+        return cmd_kill(alert_id, session=True, yes=False)
+    if choice == "7":
+        return cmd_investigate(alert_id)
+    if choice == "8":
+        return cmd_summarize(alert_id)
+    if choice == "9":
+        return cmd_dismiss(alert_id)
+    if choice == "0":
+        return 0
+    print(f"nothing done: unrecognized choice {choice!r}", file=sys.stderr)
     return 0
 
 

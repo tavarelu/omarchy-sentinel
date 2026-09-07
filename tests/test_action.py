@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from sentinel.action import open_argv, open_target
+from sentinel.action import cmd_menu, open_argv, open_target
 from sentinel.allowlist import clear_session, fingerprint, is_allowed
 from sentinel.cli import action_main
 from sentinel.models import Alert
@@ -475,3 +475,105 @@ def test_menu_lists_open_and_logs(monkeypatch, tmp_path, capsys):
     assert f"sentinel-action {alert.id} open" in menu
     assert f"sentinel-action {alert.id} open --logs" in menu
     assert "approve --scope" in menu
+
+
+def test_menu_non_tty_keeps_cheat_sheet_even_with_isatty_kwarg_unset(monkeypatch, tmp_path, capsys):
+    # Re-run of test_menu_lists_open_and_logs's assertions through cmd_menu
+    # directly, proving the isatty=None default still resolves to the
+    # non-tty cheat sheet under pytest's captured stdin.
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    alert = _alert()
+    append_alert(alert)
+    assert cmd_menu(alert.id) == 0
+    menu = capsys.readouterr().out
+    assert f"sentinel-action {alert.id} open" in menu
+    assert "approve --scope" in menu
+    assert "0 nothing" not in menu
+
+
+def test_menu_interactive_dispatch(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    alert = _alert()
+    append_alert(alert)
+    rc = cmd_menu(alert.id, isatty=True, prompt=lambda _: "9")
+    assert rc == 0
+    assert list(iter_alerts())[0].status == "dismissed"
+    out = capsys.readouterr().out
+    assert "9 dismiss" in out
+
+
+def test_menu_interactive_dispatch_approve_session(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    clear_session()
+    alert = _alert()
+    append_alert(alert)
+    rc = cmd_menu(alert.id, isatty=True, prompt=lambda _: "1")
+    assert rc == 0
+    assert list(iter_alerts())[0].status == "approved"
+    fp = fingerprint(
+        alert.rule,
+        alert.basename,
+        frozenset(["--dangerously-skip-permissions"]),
+        "",
+    )
+    assert is_allowed(fp, alert.cwd) is True
+
+
+def test_menu_interactive_dispatch_zero_does_nothing(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    alert = _alert()
+    append_alert(alert)
+    rc = cmd_menu(alert.id, isatty=True, prompt=lambda _: "0")
+    assert rc == 0
+    assert list(iter_alerts())[0].status == "open"
+
+
+def test_menu_interactive_unrecognized_choice_does_nothing(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    alert = _alert()
+    append_alert(alert)
+    rc = cmd_menu(alert.id, isatty=True, prompt=lambda _: "x")
+    assert rc == 0
+    assert list(iter_alerts())[0].status == "open"
+    assert "unrecognized choice" in capsys.readouterr().err
+
+
+def test_menu_interactive_kill_child_no_pids_does_not_crash(monkeypatch, tmp_path):
+    # No PIDs on the alert: plan_kill has nothing to kill. Selecting "5" in
+    # the menu must not raise, and must not silently mark the alert killed
+    # via a confirmation the menu keypress itself supplied.
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    alert = _alert(pids=[], evidence={"flag": "--yolo", "flags": ["--yolo"]})
+    append_alert(alert)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    rc = cmd_menu(alert.id, isatty=True, prompt=lambda _: "5")
+    assert rc in (0, 1)
+    assert list(iter_alerts())[0].status == "open"
+
+
+def test_menu_interactive_kill_session_precious_still_requires_tty_phrase(monkeypatch, tmp_path):
+    # The menu's own isatty=True (for reading the numbered choice) must not
+    # leak into kill.confirm_kill's separate tty/phrase gate — selecting "6"
+    # is never sufficient consent to kill a precious worktree on its own.
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    alert = _alert(cwd="/home/tav/Work/prod")
+    append_alert(alert)
+    monkeypatch.setattr(
+        "sentinel.action.load_precious_worktrees",
+        lambda: ["/home/tav/Work/prod"],
+    )
+    executed: list[list[int]] = []
+    monkeypatch.setattr("sentinel.action.plan_kill", lambda *a, **k: [100, 101])
+    monkeypatch.setattr(
+        "sentinel.action.execute_kill",
+        lambda pids, **k: executed.append(list(pids)),
+    )
+    # The real terminal running the menu has no tty from pytest's point of
+    # view unless we say so — confirm it refuses without one.
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    rc = cmd_menu(alert.id, isatty=True, prompt=lambda _: "6")
+    assert rc == 1
+    assert executed == []
+    assert list(iter_alerts())[0].status == "open"

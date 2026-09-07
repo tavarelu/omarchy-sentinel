@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 import tomllib
@@ -216,15 +217,40 @@ def _title_body(alert: Alert) -> tuple[str, str]:
     return title, body
 
 
-def _exec_tail(alert_id: str, exec_prefix: Sequence[str] = ("sentinel-action",)) -> list[str]:
-    return ["--exec", *exec_prefix, alert_id, "menu"]
+# A click opens a real terminal (claim 5/7): omarchy-shell execs --exec argv
+# directly with no terminal, so W3-05 routes it through Omarchy's own
+# floating-terminal launcher first. That launcher is a real gap closed by
+# this default, not a formality: sentinel-action was already resolvable
+# from a toast before this change (a hand-made ~/.local/bin symlink), but
+# cmd_menu had nothing to say to a user with no tty (see cmd_menu below).
+DEFAULT_EXEC_PREFIX: tuple[str, ...] = (
+    "omarchy-launch-floating-terminal-with-presentation",
+    "sentinel-action",
+)
+
+# Defense in depth: /usr/bin/omarchy-launch-floating-terminal-with-presentation
+# re-joins its argv with `cmd="$*"` and runs `bash -c "...; $cmd; ..."`, so
+# every token reaching it after argv[0] becomes shell source. Alert.id is a
+# str(uuid4()) today and always matches this, but the boundary is guarded
+# rather than trusted to stay that way forever.
+_SAFE_TAIL_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def _exec_tail(alert_id: str, exec_prefix: Sequence[str] = DEFAULT_EXEC_PREFIX) -> list[str]:
+    prefix = list(exec_prefix)
+    if not _SAFE_TAIL_TOKEN_RE.match(alert_id):
+        # Degrade the tail rather than suppress the notification: build_argv
+        # is shared with the sticky R-SELF path (Notifier.send), and a guard
+        # that dropped the toast would silence the tamper alert it protects.
+        prefix = [p for p in prefix if p != "omarchy-launch-floating-terminal-with-presentation"]
+    return ["--exec", *prefix, alert_id, "menu"]
 
 
 def build_argv(
     alert: Alert,
     policy: SeverityPolicy | None = None,
     *,
-    exec_prefix: Sequence[str] = ("sentinel-action",),
+    exec_prefix: Sequence[str] = DEFAULT_EXEC_PREFIX,
 ) -> list[str]:
     sp = policy if policy is not None else (STICKY if is_sticky(alert) else NotifyPolicy().for_severity(alert.severity))
     title, body = _title_body(alert)
@@ -369,7 +395,7 @@ class Notifier:
         clock: Callable[[], float] = time.time,
         state_path: Path | None = None,
         prefs_file: Path | None = None,
-        exec_prefix: Sequence[str] = ("sentinel-action",),
+        exec_prefix: Sequence[str] = DEFAULT_EXEC_PREFIX,
         prefs_ok: Callable[[Path], bool] = lambda p: True,
         on_state_write: Callable[[Path], None] = lambda p: None,
         paused: Callable[[], bool] | None = None,

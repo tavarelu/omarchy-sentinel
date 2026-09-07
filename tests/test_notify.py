@@ -54,7 +54,7 @@ def test_high_is_normal_with_30s_timeout(tmp_path):
     assert calls == [[
         "omarchy", "notification", "send", "-u", "normal", "-t", "30000", "--app-name", "Sentinel",
         "HIGH: claude started with --yolo", "claude — --yolo (scratch)",
-        "--exec", "sentinel-action", a.id, "menu",
+        "--exec", "omarchy-launch-floating-terminal-with-presentation", "sentinel-action", a.id, "menu",
     ]]
 
 
@@ -101,7 +101,34 @@ def test_exec_tail_is_last(tmp_path):
     n, calls = _notifier(tmp_path)
     a = _alert()
     n.send(a)
-    assert calls[0][-4:] == ["--exec", "sentinel-action", a.id, "menu"]
+    assert calls[0][-5:] == [
+        "--exec", "omarchy-launch-floating-terminal-with-presentation", "sentinel-action", a.id, "menu",
+    ]
+
+
+def test_build_argv_custom_exec_prefix_still_overridable():
+    a = _alert()
+    argv = build_argv(a, exec_prefix=("sentinel-action",))
+    assert argv[-4:] == ["--exec", "sentinel-action", a.id, "menu"]
+
+
+def test_exec_tail_degrades_unsafe_id_instead_of_dropping_the_toast():
+    from sentinel.notify import _exec_tail
+
+    tail = _exec_tail("not; safe")
+    # The floating-terminal launcher re-parses everything after argv[0]
+    # through a shell; an id containing metacharacters must never reach it,
+    # but the notification itself must still fire (never silently dropped —
+    # this tail is shared with the sticky R-SELF path).
+    assert "omarchy-launch-floating-terminal-with-presentation" not in tail
+    assert tail == ["--exec", "sentinel-action", "not; safe", "menu"]
+
+
+def test_exec_tail_keeps_floating_terminal_for_a_normal_uuid():
+    from sentinel.notify import _exec_tail
+
+    tail = _exec_tail("abc-123")
+    assert tail[:2] == ["--exec", "omarchy-launch-floating-terminal-with-presentation"]
 
 
 def test_load_policy_reads_config_section_and_clamps_to_30s(tmp_path):
