@@ -15,15 +15,27 @@ from typing import Any
 
 from datetime import datetime, timezone
 
-from sentinel.allowlist import clear_session, decide, fingerprint, load_all, remove
+from sentinel.action import PAUSE_FILENAME, load_pause_max
+from sentinel.allowlist import (
+    allowlist_path,
+    clear_session,
+    decide,
+    fingerprint,
+    load_all,
+    remove,
+    session_path,
+)
 from sentinel.fsutil import ensure_private_dir
+from sentinel.journal import mirror_alert
 from sentinel.keys import alert_flag_set, alert_location, candidate_prefixes
 from sentinel.models import Alert
+from sentinel.notify import STICKY_EVENTS
 from sentinel.paths import config_dir, default_config_path, state_dir
 from sentinel.procinfo import instance_key, read_starttime
 from sentinel.rules import evaluate_process, evaluate_write
 from sentinel.scout import WATCHLIST_FILENAME, scout, write_watchlist
-from sentinel.store import append_alert
+from sentinel.statewatch import StateLedger, consume_cli_writes, create_control_socket, drain_control_socket
+from sentinel.store import ALERTS_FILENAME, alerts_path, append_alert
 from sentinel.wrap_record import LAUNCHES_FILENAME, launch_to_alert, launches_path
 
 SAMPLER_MIN = 2.0
@@ -386,6 +398,14 @@ class Daemon:
         self._known = (
             set(known) if known is not None else set(DEFAULT_AGENT_BASENAMES)
         )
+        # State ledger and pause cap must exist before the Notifier below (it
+        # wires on_state_write=self._ledger.record so BurstTracker.save's own
+        # write to notify-burst.json is recorded as ours, not foreign).
+        self._ledger = StateLedger()
+        self._pause_max = cfg.get("pause_max", load_pause_max())
+        self._control_sock = (
+            create_control_socket() if cfg.get("control_socket", True) else None
+        )
         if "notify" in cfg and cfg["notify"] is not None:
             self._notify: Callable[[Alert], None] = cfg["notify"]
         else:
@@ -394,6 +414,8 @@ class Daemon:
             self._notify = Notifier(
                 load_policy(),
                 clock=lambda: self._wall_clock().timestamp(),
+                wall_clock=self._wall_clock,
+                on_state_write=self._ledger.record,
             ).send
         self._stop = cfg.get("stop")
         self._proc_root = Path(cfg.get("proc_root", "/proc"))
@@ -443,6 +465,15 @@ class Daemon:
             return
         self._watch_roots = watch_roots_from_entries(data.get("paths") or [])
 
+    def _refresh_watchlist(self) -> Path:
+        """refresh_watchlist() also writes via scout.write_watchlist, which
+        already announces over the control socket; recording directly here too
+        means the daemon's own baseline is correct even before that
+        announcement is drained (no race against the next inotify event)."""
+        path = refresh_watchlist(self._home)
+        self._ledger.record(path)
+        return path
+
     def _ensure_watchlist(self) -> None:
         if self._watch_override is not None:
             self._watch_roots = list(self._watch_override)
@@ -450,7 +481,7 @@ class Daemon:
         ensure_private_dir(state_dir())
         ensure_private_dir(config_dir())
         if not (state_dir() / WATCHLIST_FILENAME).exists():
-            refresh_watchlist(self._home)
+            self._refresh_watchlist()
         self._load_watch_paths()
 
     def _dirs_to_watch(self) -> list[Path]:
@@ -504,22 +535,41 @@ class Daemon:
         for k in dead:
             del self._seen[k]
 
+    def _store_and_dispatch(self, alert: Alert) -> None:
+        append_alert(alert)
+        self._ledger.record(alerts_path())
+        try:
+            mirror_alert(alert)
+        except Exception:
+            pass
+        self._notify(alert)
+
     def emit(self, alert: Alert) -> None:
+        if alert.rule == "R-SELF" and (alert.evidence or {}).get("event") in STICKY_EVENTS:
+            # Self-defense tamper evidence is never allowlist-suppressible: an
+            # attacker who could pre-silence R-SELF via an ordinary allowlist
+            # entry (fingerprint() is a public deterministic function) would
+            # defeat this packet's entire premise. Already deduplicated
+            # "once per distinct content" by the state ledger at the call
+            # site, so this also bypasses the time-windowed coalescer.
+            self._store_and_dispatch(alert)
+            return
         decision, fp = _allow_decision(alert, self._wall_clock())
         if decision == "allowed":
             return
         if decision == "expired":
             remove(fp)
+            self._ledger.record(allowlist_path())
+            self._ledger.record(session_path())
             alert = expired_alert(alert, fp)
         key = self._seen_key(alert)
         if key is not None and key in self._seen:
             return  # this process instance already has its one alert
         if not self.coalescer.should_emit(coalesce_key(alert)):
             return
-        append_alert(alert)
         if key is not None:
             self._seen[key] = alert.id
-        self._notify(alert)
+        self._store_and_dispatch(alert)
 
     def handle_write(
         self,
@@ -530,6 +580,10 @@ class Daemon:
     ) -> None:
         path = Path(path)
         if path.name in OPERATIONAL_NAMES:
+            # Writer identity is unavailable from inotify and the ledger is a
+            # more precise signal for Sentinel's own files, so these are
+            # classified by content rather than skipped (W3-07 R9).
+            self._classify_operational_write(path)
             return
         alert = evaluate_write(
             path,
@@ -542,6 +596,86 @@ class Daemon:
         if alert is None:
             return
         self.emit(alert)
+
+    def _raise_tamper_alert(self, evidence: dict[str, Any], path: Path) -> None:
+        event = evidence["event"]
+        summary = {
+            "foreign-write": f"sentinel state written by an unknown process: {path.name}",
+            "alert-log-truncated": "sentinel alert log was truncated",
+            "pause-over-cap": "pause_until exceeds the configured pause cap",
+        }.get(event, f"sentinel self-defense: {event}")
+        alert = Alert.new(
+            rule="R-SELF",
+            severity="high",
+            summary=summary,
+            pids=[],
+            exe="",
+            basename="",
+            cmdline=[],
+            cwd="",
+            evidence=evidence,
+            paths=[str(path)],
+        )
+        self.emit(alert)
+        # Re-baseline so an identical repeat of this exact (still-tampered)
+        # content does not raise a second alert -- "once per distinct content".
+        self._ledger.record(path)
+
+    def _pause_over_cap_value(self, path: Path) -> str | None:
+        """The raw pause_until text if it exceeds self._pause_max from the
+        daemon's own wall clock right now; else None."""
+        try:
+            raw = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        if not raw:
+            return None
+        try:
+            until = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        if until.tzinfo is None:
+            until = until.replace(tzinfo=timezone.utc)
+        if until - self._wall_clock() > self._pause_max:
+            return raw
+        return None
+
+    def _classify_pause_write(self, path: Path) -> None:
+        verdict = self._ledger.check(path)
+        over = self._pause_over_cap_value(path)
+        if over is not None:
+            if verdict == "unchanged":
+                return  # already alerted for this exact content
+            self._raise_tamper_alert(
+                {"event": "pause-over-cap", "until": over, "path": str(path)}, path
+            )
+            return
+        if verdict != "foreign":
+            return
+        self._raise_tamper_alert({"event": "foreign-write", "path": str(path)}, path)
+
+    def _classify_operational_write(self, path: Path) -> None:
+        if path.name == PAUSE_FILENAME:
+            self._classify_pause_write(path)
+            return
+        prev_size = self._ledger.last_size(path)
+        verdict = self._ledger.check(path)
+        if verdict != "foreign":
+            return
+        evidence: dict[str, Any] = {"event": "foreign-write", "path": str(path)}
+        if path.name == ALERTS_FILENAME and prev_size is not None:
+            try:
+                cur_size = path.stat().st_size
+            except OSError:
+                cur_size = 0
+            if cur_size < prev_size:
+                evidence = {
+                    "event": "alert-log-truncated",
+                    "path": str(path),
+                    "size_before": prev_size,
+                    "size_after": cur_size,
+                }
+        self._raise_tamper_alert(evidence, path)
 
     def handle_process(
         self,
@@ -582,7 +716,7 @@ class Daemon:
             evidence={"event": "IN_Q_OVERFLOW"},
         )
         self.emit(alert)
-        refresh_watchlist(self._home)
+        self._refresh_watchlist()
         if self._watch_override is None:
             self._load_watch_paths()
         if self._inotify is not None:
@@ -605,7 +739,7 @@ class Daemon:
         )
         self.emit(alert)
         if self._watch_override is None:
-            refresh_watchlist(self._home)
+            self._refresh_watchlist()
             self._load_watch_paths()
         if self._enable_inotify:
             self._rebuild_watches()
@@ -698,8 +832,8 @@ class Daemon:
         if path.name == LAUNCHES_FILENAME:
             self.consume_launches()
             return
-        if path.name in OPERATIONAL_NAMES:
-            return
+        # OPERATIONAL_NAMES writes are no longer ignored here either (W3-07
+        # R9): handle_write now classifies them through the ledger.
         self.handle_write(path)
 
     def _drain_inotify(self) -> None:
@@ -747,21 +881,68 @@ class Daemon:
         elif lost_any:
             self.handle_watch_lost(lost, lost_mask)
 
+    def _seed_ledger(self) -> None:
+        """Baseline every operational file's current on-disk state at startup,
+        so a daemon restart does not itself flag every pre-existing file as
+        foreign on the first check. pause_until is handled separately: an
+        over-cap value already on disk at startup must still be flagged once,
+        not silently absorbed as a trusted baseline (a mute attempt survives
+        a restart otherwise)."""
+        for name in OPERATIONAL_NAMES:
+            if name == PAUSE_FILENAME:
+                continue
+            path = state_dir() / name
+            if path.exists():
+                self._ledger.record(path)
+        pause_path = state_dir() / PAUSE_FILENAME
+        if pause_path.exists():
+            over = self._pause_over_cap_value(pause_path)
+            if over is not None:
+                self._raise_tamper_alert(
+                    {"event": "pause-over-cap", "until": over, "path": str(pause_path)},
+                    pause_path,
+                )
+            else:
+                self._ledger.record(pause_path)
+
+    def _drain_control_socket(self) -> None:
+        if self._control_sock is None:
+            return
+        drain_control_socket(self._control_sock, self._ledger)
+
+    def _close_control_socket(self) -> None:
+        if self._control_sock is not None:
+            try:
+                self._control_sock.close()
+            except OSError:
+                pass
+            self._control_sock = None
+
     def run(self) -> None:
         if not self._stopped():
             clear_session()
+            self._ledger.record(session_path())
             self._ensure_watchlist()
             self._rebuild_watches()
+            self._seed_ledger()
+            consume_cli_writes(self._ledger)
         try:
             while not self._stopped():
                 timeout = self._sample_timeout()
                 ino = self._inotify
+                fds: list[int] = []
                 if ino is not None and ino.fd >= 0:
-                    ready, _, _ = select.select([ino.fd], [], [], timeout)
+                    fds.append(ino.fd)
+                if self._control_sock is not None:
+                    fds.append(self._control_sock.fileno())
+                if fds:
+                    ready, _, _ = select.select(fds, [], [], timeout)
                     if self._stopped():
                         break
-                    if ready:
+                    if ino is not None and ino.fd in ready:
                         self._drain_inotify()
+                    if self._control_sock is not None and self._control_sock.fileno() in ready:
+                        self._drain_control_socket()
                 elif self._stop is not None:
                     self._stop.wait(timeout)
                 else:
@@ -771,6 +952,7 @@ class Daemon:
                 self.maybe_sample()
         finally:
             self._close_inotify()
+            self._close_control_socket()
 
 
 def run_forever(config: Mapping[str, Any] | None = None) -> None:

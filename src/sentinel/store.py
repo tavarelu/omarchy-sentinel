@@ -19,8 +19,11 @@ MAX_ROWS = 5000
 MAX_BYTES = 5_000_000
 
 
-def _alerts_path() -> Path:
+def alerts_path() -> Path:
     return state_dir() / ALERTS_FILENAME
+
+
+_alerts_path = alerts_path  # internal alias kept for readability below
 
 
 @contextmanager

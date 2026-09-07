@@ -393,6 +393,12 @@ def test_sticky_self_tamper_is_critical_no_timeout(isolated: Isolated) -> None:
 
 
 def test_sticky_sent_while_paused(isolated: Isolated) -> None:
+    # `pause` is always written against real wall-clock time (sentinel-action
+    # has no fake-clock override); align the fixture's deterministic daemon
+    # clock to real time first so is_paused()'s W3-07 pause_max cap check
+    # (pause_until - now) sees a normal ~1h gap rather than years of drift
+    # against the fixture's fixed epoch.
+    isolated.clock.t = time.time()
     rc = action_main(["pause", "1h"])
     assert rc == 0
     daemon = isolated.daemon()

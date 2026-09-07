@@ -247,6 +247,47 @@ def test_is_paused_false_without_file(monkeypatch, tmp_path):
     assert is_paused() is False
 
 
+def test_pause_refuses_over_cap(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    from sentinel.action import pause_until_path
+
+    assert action_main(["pause", "25h"]) == 2
+    assert not pause_until_path().exists()
+
+
+def test_pause_boundary_equal_to_cap_is_allowed(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    from sentinel.action import pause_until_path
+
+    assert action_main(["pause", "24h"]) == 0
+    assert pause_until_path().exists()
+
+
+def test_pause_refuses_over_configured_cap(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    cfg_dir = tmp_path / "config" / "sentinel"
+    cfg_dir.mkdir(parents=True)
+    (cfg_dir / "config.toml").write_text('[notify]\npause_max = "2h"\n')
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    assert action_main(["pause", "3h"]) == 2
+    assert action_main(["pause", "1h"]) == 0
+
+
+def test_is_paused_false_when_pause_until_exceeds_cap(monkeypatch, tmp_path):
+    from datetime import timedelta
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    frozen = datetime(2026, 9, 3, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("sentinel.action._now", lambda: frozen)
+    from sentinel.action import is_paused, write_pause
+
+    write_pause(timedelta(days=30), now=frozen)  # bypasses cmd_pause's own cap check
+    assert is_paused(now=frozen) is False
+    assert is_paused(now=frozen + timedelta(days=1)) is False
+
+
 def test_investigate_prints_detail(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     alert = _alert()

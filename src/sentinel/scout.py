@@ -8,6 +8,7 @@ from typing import Any
 
 from sentinel.fsutil import write_private_atomic
 from sentinel.paths import state_dir
+from sentinel.statewatch import announce_write, sha256_bytes
 
 WATCHLIST_FILENAME = "watchlist.json"
 
@@ -82,6 +83,21 @@ def scout(home: Path, seeds: list[str] | None = None) -> dict[str, Any]:
 
 
 def write_watchlist(result: dict[str, Any]) -> Path:
+    """Writes watchlist.json and announces it (W3-07): this runs both in-process
+    (the daemon's own refresh_watchlist) and out-of-process (`sentinel-scout
+    --refresh`, e.g. the daily sentinel-inventory.timer), so without this
+    announce the timer's writes would be classified 'foreign' the moment the
+    daemon starts routing operational names through the state ledger."""
     path = state_dir() / WATCHLIST_FILENAME
-    write_private_atomic(path, json.dumps(result, indent=2, sort_keys=True) + "\n")
+    content = json.dumps(result, indent=2, sort_keys=True) + "\n"
+    digest = sha256_bytes(content.encode("utf-8"))
+    try:
+        announce_write(path, digest)
+    except Exception:
+        pass
+    write_private_atomic(path, content)
+    try:
+        announce_write(path, digest)
+    except Exception:
+        pass
     return path

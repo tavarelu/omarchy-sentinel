@@ -68,15 +68,37 @@ def test_handle_write_self_path_is_rself(tmp_path, monkeypatch):
     assert rows[0].rule == "R-SELF"
 
 
-def test_handle_write_skips_operational_state_files(tmp_path, monkeypatch):
+def test_handle_write_operational_recorded_is_silent(tmp_path, monkeypatch):
+    """A write the daemon itself recorded (its own ledger baseline) never
+    alerts, even though OPERATIONAL_NAMES writes are no longer skipped
+    outright (W3-07 R9)."""
     state = tmp_path / "state" / "sentinel"
     state.mkdir(parents=True)
     d = _daemon(tmp_path, monkeypatch, self_paths=[state], watch_paths=[])
     for name in ("alerts.jsonl", "launches.jsonl", "allowlist.json", "watchlist.json"):
         path = state / name
         path.write_text("")
+        d._ledger.record(path)  # simulates the daemon's own write
         d.handle_write(path, writer_pid=1, writer_exe="/usr/bin/python3")
     assert list(iter_alerts()) == []
+
+
+def test_handle_write_operational_unrecorded_raises_foreign(tmp_path, monkeypatch):
+    """The same writes, without a prior ledger record/announce, are now
+    classified foreign and each raise one R-SELF (W3-07 supersedes the old
+    blanket OPERATIONAL_NAMES skip)."""
+    state = tmp_path / "state" / "sentinel"
+    state.mkdir(parents=True)
+    d = _daemon(tmp_path, monkeypatch, self_paths=[state], watch_paths=[])
+    names = ("alerts.jsonl", "launches.jsonl", "allowlist.json", "watchlist.json")
+    for name in names:
+        path = state / name
+        path.write_text("x\n")  # newline-terminated so a later append_alert lands cleanly
+        d.handle_write(path, writer_pid=1, writer_exe="/usr/bin/python3")
+    rows = list(iter_alerts())
+    assert len(rows) == len(names)
+    assert all(r.rule == "R-SELF" and r.severity == "high" for r in rows)
+    assert all(r.evidence.get("event") == "foreign-write" for r in rows)
 
 
 def test_emit_appends_when_paused_without_calling_runner(tmp_path, monkeypatch):
@@ -642,13 +664,134 @@ def test_launch_record_carries_instance(tmp_path, monkeypatch):
     assert a.evidence["launch_ts"].startswith("2026-09-05")
 
 
-def test_pause_until_write_is_operational(tmp_path, monkeypatch):
+def test_pause_until_write_is_operational_when_recorded(tmp_path, monkeypatch):
+    """pause_until stays an operational name and, when the daemon has recorded
+    the write as its own (an in-cap value written via sentinel-action), stays
+    silent -- it just goes through the ledger like the others now (W3-07)."""
     from sentinel.paths import state_dir
 
     d = _daemon(tmp_path, monkeypatch, self_paths=[str(state_dir())], watch_paths=[])
     state_dir().mkdir(parents=True, exist_ok=True)
     for name in ("pause_until", "alerts.lock", "alerts.jsonl.tmp", "alerts.jsonl.1", "notify-prefs.json"):
         p = state_dir() / name
-        p.write_text("x")
+        p.write_text("2020-01-01T00:00:00+00:00\n" if name == "pause_until" else "x")
+        d._ledger.record(p)
         d.handle_write(p)
     assert list(iter_alerts()) == []
+
+
+def test_pause_until_write_unrecorded_raises_foreign(tmp_path, monkeypatch):
+    """The same files, unrecorded, now raise R-SELF instead of being skipped
+    outright -- the old blanket OPERATIONAL_NAMES skip is gone (W3-07 R9)."""
+    from sentinel.paths import state_dir
+
+    d = _daemon(tmp_path, monkeypatch, self_paths=[str(state_dir())], watch_paths=[])
+    state_dir().mkdir(parents=True, exist_ok=True)
+    names = ("pause_until", "alerts.lock", "alerts.jsonl.tmp", "alerts.jsonl.1", "notify-prefs.json")
+    for name in names:
+        p = state_dir() / name
+        p.write_text("2020-01-01T00:00:00+00:00\n" if name == "pause_until" else "x")
+        d.handle_write(p)
+    rows = list(iter_alerts())
+    assert len(rows) == len(names)
+    assert all(r.rule == "R-SELF" and r.evidence.get("event") == "foreign-write" for r in rows)
+
+
+# --------------------------------------------------------- W3-07 self-defense
+
+
+def test_emit_mirrors_alert_to_journal_after_append_alert(tmp_path, monkeypatch):
+    order: list[str] = []
+    monkeypatch.setattr("sentinel.daemon.append_alert", lambda alert: order.append("append"))
+    monkeypatch.setattr("sentinel.daemon.mirror_alert", lambda alert: order.append("mirror"))
+    d = _daemon(tmp_path, monkeypatch)
+    d.emit(_bypass())
+    assert order == ["append", "mirror"]
+
+
+def test_emit_survives_journal_mirror_raising(tmp_path, monkeypatch):
+    def boom(alert):
+        raise OSError("journal down")
+
+    monkeypatch.setattr("sentinel.daemon.mirror_alert", boom)
+    notified: list = []
+    d = _daemon(tmp_path, monkeypatch, notify=lambda a: notified.append(a))
+    alert = _bypass()
+    d.emit(alert)
+    rows = list(iter_alerts())
+    assert len(rows) == 1 and rows[0].id == alert.id
+    assert len(notified) == 1
+
+
+def test_foreign_write_to_allowlist_raises_one_rself_high(tmp_path, monkeypatch):
+    from sentinel.paths import state_dir
+
+    d = _daemon(tmp_path, monkeypatch, self_paths=[state_dir()], watch_paths=[])
+    state_dir().mkdir(parents=True, exist_ok=True)
+    path = state_dir() / "allowlist.json"
+    path.write_text('{"entries":{}}')  # written directly, no d._ledger.record/announce
+    d.handle_write(path)
+    rows = list(iter_alerts())
+    assert len(rows) == 1
+    assert rows[0].rule == "R-SELF" and rows[0].severity == "high"
+    assert rows[0].evidence == {"event": "foreign-write", "path": str(path)}
+    # An identical repeat write is already recorded by the alert above; no 2nd alert.
+    d.handle_write(path)
+    assert len(list(iter_alerts())) == 1
+
+
+def test_truncated_alerts_jsonl_raises_rself(tmp_path, monkeypatch):
+    from sentinel.paths import state_dir
+    from sentinel.store import append_alert as real_append
+
+    d = _daemon(tmp_path, monkeypatch, self_paths=[state_dir()], watch_paths=[])
+    real_append(_bypass())
+    real_append(_bypass(pid=2))
+    path = state_dir() / "alerts.jsonl"
+    d._ledger.record(path)  # the daemon's own append path has recorded it as ours
+    path.write_text("")  # truncated directly, bypassing store.append_alert
+    d.handle_write(path)
+    rows = [a for a in iter_alerts() if a.rule == "R-SELF"]
+    assert len(rows) == 1
+    assert rows[0].severity == "high"
+    assert rows[0].evidence.get("event") == "alert-log-truncated"
+    assert rows[0].evidence.get("path") == str(path)
+
+
+def test_cli_announced_write_produces_no_alert(tmp_path, monkeypatch):
+    from sentinel import statewatch
+    from sentinel.paths import state_dir
+
+    d = _daemon(tmp_path, monkeypatch, self_paths=[state_dir()], watch_paths=[])
+    path = state_dir() / "allowlist.json"
+    content = '{"entries":{"x":1}}'
+    digest = statewatch.sha256_bytes(content.encode())
+    statewatch.announce_write(path, digest)  # what sentinel-action does, pre-write
+    path.write_text(content)
+    statewatch.announce_write(path, digest)  # ...and post-write
+    d._drain_control_socket()
+    d.handle_write(path)
+    assert list(iter_alerts()) == []
+
+
+def test_pause_30d_is_not_paused_and_raises_one_self_alert(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from sentinel import action
+    from sentinel.paths import state_dir
+
+    d = _daemon(tmp_path, monkeypatch, self_paths=[state_dir()], watch_paths=[])
+    state_dir().mkdir(parents=True, exist_ok=True)
+    path = state_dir() / "pause_until"
+    over = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    path.write_text(over + "\n")
+    d.handle_write(path)
+    rows = list(iter_alerts())
+    assert len(rows) == 1
+    assert rows[0].rule == "R-SELF" and rows[0].severity == "high"
+    assert rows[0].evidence.get("event") == "pause-over-cap"
+    assert rows[0].evidence.get("until") == over
+    # An identical repeat write does not raise a second alert.
+    d.handle_write(path)
+    assert len(list(iter_alerts())) == 1
+    assert action.is_paused(now=datetime.now(timezone.utc)) is False
