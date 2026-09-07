@@ -40,9 +40,9 @@ One JSON object per file, `tests/joint/cases/<id>.json`. `id` must match the fil
 | `title` | yes | one line, what the case proves |
 | `author` | yes | `grok` or `claude` |
 | `why` | yes | the attack or mistake being modelled, in the author's own words |
-| `requires` | no | feature gates; a case naming an unimplemented gate is **skipped**, not failed. Known gates: `ux-01` (notify policy and burst), `ux-02a` (investigate v2 and `open`) |
+| `requires` | no | feature gates; a case naming an unimplemented gate is **skipped**, not failed. Known gates: `ux-01` (notify policy and burst), `ux-02a` (investigate v2 and `open`), `w3-07` (self-defense and the pause cap; not yet implemented, so its cases skip) |
 | `config` | no | raw text written to `XDG_CONFIG_HOME/sentinel/config.toml` before the action |
-| `state` | no | filename → raw text, written into `XDG_STATE_HOME/sentinel/` before the action. Raw text on purpose: a case may write invalid JSON, a truncated file, or a file full of newlines |
+| `state` | no | filename → raw text, written into `XDG_STATE_HOME/sentinel/` before the action. Raw text on purpose: a case may write invalid JSON, a truncated file, or a file full of newlines. One exception: a value of exactly `+<N>s` is written as the ISO timestamp N seconds from now plus a newline, so a pause can be in the future yet inside the 24 h cap |
 | `state_mode` | no | filename → octal string (e.g. `"666"`) applied after writing, so a case can model a foreign-written file |
 | `action` | yes | see below |
 | `expect` | yes | see below |

@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import json
 import os
+from datetime import datetime, timedelta, timezone
 import stat
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -24,7 +25,7 @@ from sentinel.notify import Notifier, load_policy
 CASES_DIR = Path(__file__).parent / "cases"
 # Gates a case may name in "requires". A case naming anything else is skipped, not failed, so the red team
 # can write cases ahead of the feature.
-IMPLEMENTED = {"ux-01", "ux-02a"}
+IMPLEMENTED = {"ux-01", "ux-02a"}  # add "w3-07" when the pause cap merges
 EXPECT_KEYS = {
     "no_exception", "toasts", "summaries", "urgencies", "timeouts", "argv_excludes",
     "body_contains", "body_excludes", "exit_code", "stdout_contains", "stdout_excludes",
@@ -79,12 +80,25 @@ def _alert_from_stub(stub: dict, i: int) -> Alert:
     )
 
 
+def _resolve_relative_time(text: str) -> str:
+    """A state value of the form ``+<N>s`` becomes an ISO timestamp N seconds from now, plus a newline.
+
+    Cases about pausing need a pause that is in the future but inside any cap (W3-07 caps pauses at 24 h),
+    which no fixed date can express. Anything else is written verbatim.
+    """
+    stripped = text.strip()
+    if stripped.startswith("+") and stripped.endswith("s") and stripped[1:-1].isdigit():
+        when = datetime.now(timezone.utc) + timedelta(seconds=int(stripped[1:-1]))
+        return when.isoformat() + "\n"
+    return text
+
+
 def _write_state(case: dict, state: Path) -> dict[str, bytes]:
     state.mkdir(parents=True, exist_ok=True)
     before: dict[str, bytes] = {}
     for name, text in (case.get("state") or {}).items():
         p = state / name
-        p.write_text(text)
+        p.write_text(_resolve_relative_time(text))
         before[name] = p.read_bytes()
     for name, mode in (case.get("state_mode") or {}).items():
         os.chmod(state / name, int(mode, 8))

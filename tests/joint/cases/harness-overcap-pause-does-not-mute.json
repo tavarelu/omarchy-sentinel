@@ -1,13 +1,13 @@
 {
-  "id": "harness-sticky-alert-ignores-pause",
-  "title": "A self-tamper alert is delivered sticky even while notifications are paused",
+  "id": "harness-overcap-pause-does-not-mute",
+  "title": "A pause far beyond the cap is not a pause: ordinary alerts still toast",
   "author": "claude",
-  "why": "Harness self-proof for the invariant that matters most: an agent can run `sentinel-action pause`, so the one alert class about Sentinel itself must ignore pause and carry no timeout. The pause is one hour from now, inside the 24 h cap W3-07 adds, so the case holds before and after that packet.",
+  "why": "W3-07 caps pauses at 24 h. An agent that writes pause_until far into the future must not mute Sentinel; the file is treated as invalid and the ordinary alert is delivered alongside the sticky one.",
   "requires": [
-    "ux-01"
+    "w3-07"
   ],
   "state": {
-    "pause_until": "+3600s"
+    "pause_until": "2099-01-01T00:00:00+00:00\n"
   },
   "action": {
     "type": "notify",
@@ -26,17 +26,20 @@
       },
       {
         "severity": "high",
-        "summary": "an ordinary high alert while paused"
+        "summary": "an ordinary high alert while an over-cap pause file exists"
       }
     ]
   },
   "expect": {
     "no_exception": true,
-    "toasts": 1,
+    "toasts": 2,
     "summaries": 0,
     "urgencies": [
-      "critical"
+      "critical",
+      "normal"
     ],
-    "timeouts": []
+    "timeouts": [
+      30000
+    ]
   }
 }
