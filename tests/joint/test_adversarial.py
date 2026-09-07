@@ -25,7 +25,7 @@ from sentinel.notify import Notifier, load_policy
 CASES_DIR = Path(__file__).parent / "cases"
 # Gates a case may name in "requires". A case naming anything else is skipped, not failed, so the red team
 # can write cases ahead of the feature.
-IMPLEMENTED = {"ux-01", "ux-02a"}  # add "w3-07" when the pause cap merges
+IMPLEMENTED = {"ux-01", "ux-02a", "w3-07"}
 EXPECT_KEYS = {
     "no_exception", "toasts", "summaries", "urgencies", "timeouts", "argv_excludes",
     "body_contains", "body_excludes", "exit_code", "stdout_contains", "stdout_excludes",
