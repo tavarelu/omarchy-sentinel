@@ -1,5 +1,5 @@
 # SkillSpector baseline for Omarchy Sentinel.
-# Reviewed 2026-09-06 against a clean 'git archive HEAD' export with skillspector v2.9.6 --no-llm.
+# Reviewed 2026-09-06, extended 2026-09-07 (wave 3: vendors, statewatch, journal, scan) against a clean 'git archive HEAD' export with skillspector v2.9.6 --no-llm.
 # Every suppression below was read and justified in docs/collab/reviews/SKILLSPECTOR-SELF-SCAN.md.
 # Deliberate policy: src/ is suppressed per finding (fingerprints), never by glob, so any NEW
 # finding in the daemon or CLI shows up on the next scan.
@@ -22,6 +22,8 @@ rules:
     reason: "The Apache-2.0 text is not code."
   - path: "pyproject.toml"
     reason: "Dependency metadata for a stdlib-only package; there is nothing to pin."
+  - path: ".github/**"
+    reason: "GitHub Actions CI. `sudo apt-get install shellcheck` runs on the hosted runner so the installer-script tests are not skipped; nothing here is installed by the plugin."
 fingerprints:
 - hash: sha256:c78ae6d76bd48f2af86d4ef8156df033e938a9954a908bb2c135326ffadaacb7
   rule_id: AST7
@@ -67,3 +69,43 @@ fingerprints:
   rule_id: PE2
   file: src/sentinel/rules.py
   reason: "the literal 'sudo ' is one of the argv patterns Sentinel looks for in a monitored agent's command line, not a privilege escalation of its own."
+- hash: sha256:c8665240d53499ace4e08e5abcac080391be08e9ea2ac8a91056f97d9b1a239c
+  rule_id: AST7
+  file: src/sentinel/action.py
+  reason: "getattr() over the fixed SEVERITIES tuple when printing the effective notify policy (cmd_notify); no attribute name comes from user or alert data."
+- hash: sha256:639dbe66e4d319e84136976f87c10aa424807e7abfaaf421c7eb0e39ea195ff4
+  rule_id: AST7
+  file: src/sentinel/action.py
+  reason: "getattr() over the fixed SEVERITIES tuple when printing the effective notify policy (cmd_notify); no attribute name comes from user or alert data."
+- hash: sha256:dbd9469e50e15468a1c61c3a4bdf19fc74604a274ada37fd43b41d14be938981
+  rule_id: AST4
+  file: src/sentinel/investigate.py
+  reason: "Pager: subprocess.run with a fixed argv list and the rendered report on stdin; no shell, never called by the daemon."
+- hash: sha256:63efb84d065e44ea4c09b9ee0c86db4739cc78fed70280a8dbcd349f4871452b
+  rule_id: AST4
+  file: src/sentinel/journal.py
+  reason: "Fallback journald path: `logger -t sentinel <message>` as an argv list when the native AF_UNIX journal socket is unavailable; no shell."
+- hash: sha256:a3c7127c7c343d1bf9a530640e162ae08ac8116ced4d0d9411a4b437b5fdf230
+  rule_id: AST4
+  file: src/sentinel/notify.py
+  reason: "`omarchy notification send` fired as an argv list with a 5 s timeout; the only way a toast reaches the desktop."
+- hash: sha256:b9aab1b2556bc7edf954f681c2cf60a3a2ba4b8edb0ffce90cfcb89cc9911096
+  rule_id: AST4
+  file: src/sentinel/scan.py
+  reason: "sentinel-scan runs the scanner as an argv list inside a transient user service (PrivateNetwork, ReadOnlyPaths) or unshare -rn, with a timeout; never invoked by the daemon."
+- hash: sha256:63d0db55121e760c1705482c191460ac36e8eeec7d4606388b678d0d9be861c1
+  rule_id: AS1
+  file: src/sentinel/vendors.py
+  reason: "The vendor table names the config files an agent could edit to widen its own access (~/.codex/config.toml, ~/.claude/settings.json ...). Watch targets and bypass-flag metadata; nothing in this module opens them."
+- hash: sha256:f1dd3a6ae84ee7075adaccf7ae2359d114b76437a9325c505b657544bd9958d9
+  rule_id: EA4
+  file: src/sentinel/statewatch.py
+  reason: "Control-socket receive buffer and ancillary size are fixed constants (64 KiB, one ucred); every datagram is bounded, malformed ones are dropped and counted."
+- hash: sha256:e5a5057f622df260e6e935495692622407da6e14d1642da0e4303548821045c0
+  rule_id: PE2
+  file: src/sentinel/rules.py
+  reason: "The net-helper basename set and a comment describing the 'curl | sudo sh' shapes R-CHILD-SHELL detects; data and prose, not execution."
+- hash: sha256:77b8c9f20688e8d8f930c14a964e4106f7dfa78dee5f08677150b5dfb332e251
+  rule_id: PE3
+  file: src/sentinel/scan.py
+  reason: "_looks_like_auth: the substring rule that makes tree_hash refuse to open credential-named files. This is the code that avoids credential access."

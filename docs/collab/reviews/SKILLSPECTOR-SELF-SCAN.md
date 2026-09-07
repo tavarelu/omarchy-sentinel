@@ -67,3 +67,21 @@ A finding that is not in the baseline blocks the merge until it is read and eith
 - `/security-review` needs an `origin` remote and has never run; do it with the first push (publishing step).
 - W5-06 closes S10 for real. Until then the CRITICAL is suppressed but not fixed, and this document is the
   record of that.
+
+## Addendum 2026-09-07: wave 3 (W3-05, W3-07, W6-01a) re-scan
+
+Re-ran the same command against a clean `git archive HEAD` export at `c2e25d2` with the committed
+baseline. Result: **13 new findings, 0 after review**; 228 suppressed in total.
+
+Ten are in `src/` and were baselined per fingerprint with a reason each (see
+`.skillspector-baseline.yaml`): two `getattr()` uses over the fixed severity tuple in the new
+`sentinel-action notify` output; four `subprocess.run` calls that all pass argv lists (pager,
+`logger` fallback for journald, `omarchy notification send`, the sandboxed scanner); the vendor table
+in `vendors.py` naming the config files Sentinel watches; the bounded control-socket buffer
+constants in `statewatch.py`; the net-helper basename set in `rules.py`; and `_looks_like_auth` in
+`scan.py`, which is the code that keeps `tree_hash` from opening credential-named files. Three are in
+`.github/workflows/ci.yml` (the runner's `sudo apt-get install shellcheck`) and are covered by a
+`.github/**` path rule, since nothing there ships with the plugin.
+
+Nothing in the new modules opens a file body, spawns a shell string, or reaches the network from
+the daemon. The scan output is reproducible from the command above and is not committed again.
