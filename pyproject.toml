@@ -13,6 +13,7 @@ dev = ["pytest>=8.0"]
 sentinel = "sentinel.cli:main"
 sentinel-scout = "sentinel.cli:scout_main"
 sentinel-action = "sentinel.cli:action_main"
+sentinel-scan = "sentinel.cli:scan_main"
 
 [build-system]
 requires = ["setuptools>=68"]

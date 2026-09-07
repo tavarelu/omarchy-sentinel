@@ -1,0 +1,168 @@
+{
+  "analysis_completeness": {
+    "analyzer_statuses": [],
+    "coverage_percent": 100.0,
+    "entirely_uninspected_files": 0,
+    "execution_successful": true,
+    "findings_after_filtering": 57,
+    "findings_before_filtering": 75,
+    "fully_inspected_files": 112,
+    "is_complete": false,
+    "ledger_exceptions": [],
+    "limitations": [],
+    "partially_inspected_files": 0,
+    "scanned_components": 112,
+    "scope_exclusions": [
+      {
+        "end_line": null,
+        "fatal": false,
+        "message": "Hidden file is excluded from the configured scan scope.",
+        "outcome": "out_of_scope",
+        "path": ".gitignore",
+        "phase": "discovery",
+        "reason_code": "hidden_file",
+        "start_line": null
+      }
+    ],
+    "total_components": 112
+  },
+  "components": [
+    {
+      "executable": false,
+      "lines": 1,
+      "path": ".grok/prompts/auditor.md",
+      "size_bytes": 541,
+      "type": "markdown"
+    },
+    {
+      "executable": false,
+      "lines": 1,
+      "path": ".grok/prompts/implementer.md",
+      "size_bytes": 394,
+      "type": "markdown"
+    },
+    {
+      "executable": false,
+      "lines": 1,
+      "path": ".grok/prompts/reviewer.md",
+      "size_bytes": 444,
+      "type": "markdown"
+    }
+  ],
+  "execution_successful": true,
+  "issues": [],
+  "metadata": {
+    "filtering_mode": "heuristic",
+    "has_executable_scripts": true,
+    "inference_usage": [],
+    "llm_available": false,
+    "llm_requested": false,
+    "meta_analysis_applied": false,
+    "skillspector_version": "2.9.6"
+  },
+  "risk_assessment": {
+    "recommendation": "SAFE",
+    "score": 0,
+    "severity": "LOW"
+  },
+  "skill": {
+    "name": "unknown",
+    "scanned_at": "2026-09-06T06:35:14.269971+00:00",
+    "source": "/tmp/claude-1000/-home-tav/142054fa-4b1a-4789-9a95-6de00fc3ad15/scratchpad/export"
+  },
+  "suppressed": [
+    {
+      "category": "Dangerous Code Execution",
+      "code_snippet": "    prefs = load_prefs() or {}\n    eff = effective_policy(policy, prefs)\n    if as_json:\n        out = {name: getattr(eff, name).enabled for name in SEVERITIES}\n        out[\"source\"] = {name: (\"prefs\" if name in prefs else \"config\") for name in SEVERITIES}\n        out[\"prefs_path\"] = str(prefs_path())\n        print(json.dumps(out, sort_keys=True))",
+      "confidence": 0.5,
+      "explanation": "Dynamic getattr() with a non-literal attribute name can access arbitrary object attributes, potentially bypassing access controls.",
+      "finding": "        out = {name: getattr(eff, name).enabled for name in SEVERITIES}",
+      "finding_id": "finding-ee47b239d23d4c28a34a8e97057015eb",
+      "id": "AST7",
+      "intent": null,
+      "location": {
+        "end_line": 321,
+        "file": "src/sentinel/action.py",
+        "start_line": 321
+      },
+      "pattern": "Dynamic attribute access via getattr()",
+      "remediation": "Replace dynamic getattr() with explicit attribute access or a dictionary lookup with an allowlist of permitted attributes.",
+      "severity": "LOW",
+      "suppressed": true,
+      "suppression_reason": "getattr() over the fixed SEVERITIES tuple when printing the notify policy; no attribute name comes from user or alert data.",
+      "tags": [
+        "Dangerous Code Execution"
+      ]
+    },
+    {
+      "category": "Dangerous Code Execution",
+      "code_snippet": "        print(json.dumps(out, sort_keys=True))\n        return 0\n    for name in SEVERITIES:\n        sp = getattr(eff, name)\n        source = \"prefs\" if name in prefs else \"config\"\n        print(f\"{name:7s} {'on ' if sp.enabled else 'off'}  ({sp.urgency}, {sp.timeout_ms // 1000} s)   source: {source}\")\n    print(f\"sticky  R-SELF {', '.join(sorted(STICKY_EVENTS))}  (critical, never expires)\")",
+      "confidence": 0.5,
+      "explanation": "Dynamic getattr() with a non-literal attribute name can access arbitrary object attributes, potentially bypassing access controls.",
+      "finding": "        sp = getattr(eff, name)",
+      "finding_id": "finding-303f1a49f5c84d69a7c5356451e8c0d4",
+      "id": "AST7",
+      "intent": null,
+      "location": {
+        "end_line": 327,
+        "file": "src/sentinel/action.py",
+        "start_line": 327
+      },
+      "pattern": "Dynamic attribute access via getattr()",
+      "remediation": "Replace dynamic getattr() with explicit attribute access or a dictionary lookup with an allowlist of permitted attributes.",
+      "severity": "LOW",
+      "suppressed": true,
+      "suppression_reason": "getattr() over the fixed SEVERITIES tuple when printing the notify policy; no attribute name comes from user or alert data.",
+      "tags": [
+        "Dangerous Code Execution"
+      ]
+    },
+    {
+      "category": "Dangerous Code Execution",
+      "code_snippet": "\ndef _run(cmd: list[str], timeout: float = 5.0) -> str:\n    try:\n        proc = subprocess.run(\n            cmd,\n            check=False,\n            capture_output=True,",
+      "confidence": 0.7,
+      "explanation": "subprocess module calls execute external commands. Without careful input validation, this enables command injection.",
+      "finding": "        proc = subprocess.run(\n            cmd,\n            check=False,\n            capture_output=True,\n            text=True,\n            timeout=timeout,\n        )",
+      "finding_id": "finding-f53f4c86c8fb44d0a6a64cf3b3b8255d",
+      "id": "AST4",
+      "intent": null,
+      "location": {
+        "end_line": 76,
+        "file": "src/sentinel/health.py",
+        "start_line": 70
+      },
+      "pattern": "subprocess module call",
+      "remediation": "Use subprocess.run() with shell=False and an explicit argument list. Validate all inputs and avoid passing user-controlled data to commands.",
+      "severity": "MEDIUM",
+      "suppressed": true,
+      "suppression_reason": "subprocess.run with an argv array and a timeout for smartctl, sensors and notify-send; no shell, no alert-derived tokens.",
+      "tags": [
+        "Dangerous Code Execution"
+      ]
+    },
+    {
+      "category": "Data Flow",
+      "code_snippet": "            \"Content-Type\": \"application/json\",\n        },\n    )\n    with urllib.request.urlopen(req, timeout=30) as resp:\n        body = json.loads(resp.read().decode(\"utf-8\"))\n    choices = body.get(\"choices\") or []\n    if not choices:",
+      "confidence": 0.9,
+      "explanation": "Credentials or environment variables flow to a network sink. This is a high-confidence indicator of credential exfiltration.",
+      "finding": "    with urllib.request.urlopen(req, timeout=30) as resp:",
+      "finding_id": "finding-8974df41f66f4095b71b797b43d32530",
+      "id": "TT3",
+      "intent": null,
+      "location": {
+        "end_line": 126,
+        "file": "src/sentinel/summarize.py",
+        "start_line": 126
+      },
+      "pattern": "Tainted flow: 'req' from os.environ.get (line 117, credential/environment) \u2192 urllib.request.urlopen (network output)",
+      "remediation": "Never send credentials or environment variables over the network. Use secure credential stores and avoid transmitting secrets in request bodies or URLs.",
+      "severity": "CRITICAL",
+      "suppressed": true,
+      "suppression_reason": "TRUE POSITIVE, intentional and opt-in: Summarize is a separate, click-triggered oneshot that posts a redacted metadata bundle. The daemon never calls it. Tracked as S10 in SECURITY-REVIEW-2026-09-05 and scheduled for W5-06 (endpoint moves into config behind a provider allowlist).",
+      "tags": [
+        "Data Flow"
+      ]
+    }
+  ],
+  "suppressed_count": 4
+}

@@ -1,0 +1,181 @@
+{
+  "analysis_completeness": {
+    "analyzer_statuses": [],
+    "coverage_percent": 100.0,
+    "entirely_uninspected_files": 0,
+    "execution_successful": true,
+    "findings_after_filtering": 57,
+    "findings_before_filtering": 75,
+    "fully_inspected_files": 112,
+    "is_complete": false,
+    "ledger_exceptions": [],
+    "limitations": [],
+    "partially_inspected_files": 0,
+    "scanned_components": 112,
+    "scope_exclusions": [
+      {
+        "end_line": null,
+        "fatal": false,
+        "message": "Hidden file is excluded from the configured scan scope.",
+        "outcome": "out_of_scope",
+        "path": ".gitignore",
+        "phase": "discovery",
+        "reason_code": "hidden_file",
+        "start_line": null
+      }
+    ],
+    "total_components": 112
+  },
+  "components": [
+    {
+      "executable": false,
+      "lines": 1,
+      "path": ".grok/prompts/auditor.md",
+      "size_bytes": 541,
+      "type": "markdown"
+    },
+    {
+      "executable": false,
+      "lines": 1,
+      "path": ".grok/prompts/implementer.md",
+      "size_bytes": 394,
+      "type": "markdown"
+    },
+    {
+      "executable": false,
+      "lines": 1,
+      "path": ".grok/prompts/reviewer.md",
+      "size_bytes": 444,
+      "type": "markdown"
+    }
+  ],
+  "execution_successful": true,
+  "issues": [
+    {
+      "category": "Data Flow",
+      "code_snippet": "            \"Content-Type\": \"application/json\",\n        },\n    )\n    with urllib.request.urlopen(req, timeout=30) as resp:\n        body = json.loads(resp.read().decode(\"utf-8\"))\n    choices = body.get(\"choices\") or []\n    if not choices:",
+      "confidence": 0.9,
+      "explanation": "Credentials or environment variables flow to a network sink. This is a high-confidence indicator of credential exfiltration.",
+      "finding": "    with urllib.request.urlopen(req, timeout=30) as resp:",
+      "finding_id": "finding-5751d5dd92a547c58941e41f05744561",
+      "id": "TT3",
+      "intent": null,
+      "location": {
+        "end_line": 126,
+        "file": "src/sentinel/summarize.py",
+        "start_line": 126
+      },
+      "pattern": "Tainted flow: 'req' from os.environ.get (line 117, credential/environment) \u2192 urllib.request.urlopen (network output)",
+      "remediation": "Never send credentials or environment variables over the network. Use secure credential stores and avoid transmitting secrets in request bodies or URLs.",
+      "severity": "CRITICAL",
+      "tags": [
+        "Data Flow"
+      ]
+    },
+    {
+      "category": "Agent Snooping",
+      "code_snippet": "\n## Context\n1. `DEFAULT_BYPASS_FLAGS` (`src/sentinel/rules.py:11-19`) is `--dangerously-skip-permissions`, `bypassPermissions`, `--yolo`, `trust-all`, `--trust-all`. Grok Build's `--help` on this machine lists `--always-approve` and `--permission-mode <default|acceptEdits|auto|dontAsk|bypassPermissions|plan>`; none of `--always-approve`, `dontAsk` are detected.\n2. `~/.grok/config.toml` on this machine contains `permission_mode = \"always-approve\"` under `[ui]`. That is a bypass that never appears in argv. Same class: Codex `approval_policy` and `sandbox_mode` in `~/.codex/config.toml`, Gemini `--approval-mode yolo` and settings.\n3. PATH order in the user's shell and in the running `omarchy-shell` process: `/usr/share/omarchy/bin`, then mise install dirs for claude, codex, gemini, gh, node, grok, then mise shims, then `/usr/local/bin`, `/usr/bin`, and only then `~/.local/bin` (position 12). `command -v claude` resolves to `~/.local/share/mise/installs/claude/latest/claude`. A shim placed in `~/.local/bin` by `scripts/install-wrappers.sh` (`BIN_DIR` at line 15) is never executed.\n4. The existing `~/.local/bin/claude`, `codex`, `grok` are mise launcher scripts (`exec mise x ...`), not Sentinel shims.\n5. `omarchy-notification-send` stores the `--exec` argv in the `omarchy-exec-argv` hint and `omarchy-shell` executes it directly on click, with no terminal. Omarchy's own hooks (`~/.config/omarchy/hooks/post-update.d/setup-fingerprint.hook`) use `--exec omarchy-launch-floating-terminal-with-presentation <cmd>` for exactly this case. `omarchy-launch-floating-terminal-with-presentation` exists at `/usr/bin` and runs `omarchy-show-logo; <cmd>; omarchy-show-done` in a floating terminal via `uwsm-app`.",
+      "confidence": 0.27,
+      "explanation": "Skill reads from agent configuration directories (.claude/, .codex/, .gemini/). These directories may contain API keys, personal settings, and other credentials that the skill has no legitimate need to access.",
+      "finding": "~/.codex/config.toml",
+      "finding_id": "finding-e80204b24b6644d2a7ed03219a70a2d1",
+      "id": "AS1",
+      "intent": null,
+      "location": {
+        "end_line": null,
+        "file": "docs/collab/packets/W3-05-vendor-bypass-install-truth-click-path.md",
+        "start_line": 9
+      },
+      "pattern": "Agent Config Directory Access",
+      "remediation": "Remove all code or instructions that access agent configuration directories (.claude/, .codex/, .gemini/). If configuration values are needed, pass them explicitly as parameters or environment variables \u2014 never read the agent's own config files.",
+      "severity": "HIGH",
+      "tags": [
+        "Agent Snooping"
+      ]
+    },
+    {
+      "category": "Agent Snooping",
+      "code_snippet": "- **Root resolution.** Resolve watch roots once at load into a `tuple[Path, ...]` of resolved paths; `_path_under` takes resolved roots and does not call `resolve()` on them again. Keep resolving the event path once.\n\n## Tests\n- `tests/test_scout.py`: fixture tree under a temp home mirroring the real layout (`.claude/settings.json`, `.claude/.credentials.json`, `.claude/plugins/marketplaces/x/plugins/hookify/LICENSE`, `.claude/plugins/marketplaces/x/plugins/y/hooks/hooks.json`, `.claude.json`, `.grok/config.toml`, `.gemini/settings.json`, `Work/proj/.claude/settings.local.json`, `Work/proj/.git/`). Assert: marketplace files are absent from the watchlist, `.claude.json` is `settings`, project settings found, `other` entries absent, `version == 2`.\n- `tests/test_daemon_coalesce.py::test_watchlist_rewrite_reloads_without_alert`: write a new watchlist in the state dir; after debounce the daemon's roots change and no alert is emitted.\n- `tests/test_rules.py::test_path_under_uses_preresolved_roots`.\n- Performance test with a marker `slow`: 300 roots, 1000 events, under 500 ms total.",
+      "confidence": 0.27,
+      "explanation": "Skill reads from agent configuration directories (.claude/, .codex/, .gemini/). These directories may contain API keys, personal settings, and other credentials that the skill has no legitimate need to access.",
+      "finding": "/.claude/settings",
+      "finding_id": "finding-079ec5f1a18d471e96d9b2a3273cdfda",
+      "id": "AS1",
+      "intent": null,
+      "location": {
+        "end_line": null,
+        "file": "docs/collab/packets/W3-03-scout-v2-precise-watchlist.md",
+        "start_line": 25
+      },
+      "pattern": "Agent Config Directory Access",
+      "remediation": "Remove all code or instructions that access agent configuration directories (.claude/, .codex/, .gemini/). If configuration values are needed, pass them explicitly as parameters or environment variables \u2014 never read the agent's own config files.",
+      "severity": "HIGH",
+      "tags": [
+        "Agent Snooping"
+      ]
+    },
+    {
+      "category": "Dangerous Code Execution",
+      "code_snippet": "\ndef _run(cmd: list[str], timeout: float = 5.0) -> str:\n    try:\n        proc = subprocess.run(\n            cmd,\n            check=False,\n            capture_output=True,",
+      "confidence": 0.7,
+      "explanation": "subprocess module calls execute external commands. Without careful input validation, this enables command injection.",
+      "finding": "        proc = subprocess.run(\n            cmd,\n            check=False,\n            capture_output=True,\n            text=True,\n            timeout=timeout,\n        )",
+      "finding_id": "finding-df4c3ff8ba66495f99af3731973d881c",
+      "id": "AST4",
+      "intent": null,
+      "location": {
+        "end_line": 76,
+        "file": "src/sentinel/health.py",
+        "start_line": 70
+      },
+      "pattern": "subprocess module call",
+      "remediation": "Use subprocess.run() with shell=False and an explicit argument list. Validate all inputs and avoid passing user-controlled data to commands.",
+      "severity": "MEDIUM",
+      "tags": [
+        "Dangerous Code Execution"
+      ]
+    },
+    {
+      "category": "Dangerous Code Execution",
+      "code_snippet": "    prefs = load_prefs() or {}\n    eff = effective_policy(policy, prefs)\n    if as_json:\n        out = {name: getattr(eff, name).enabled for name in SEVERITIES}\n        out[\"source\"] = {name: (\"prefs\" if name in prefs else \"config\") for name in SEVERITIES}\n        out[\"prefs_path\"] = str(prefs_path())\n        print(json.dumps(out, sort_keys=True))",
+      "confidence": 0.5,
+      "explanation": "Dynamic getattr() with a non-literal attribute name can access arbitrary object attributes, potentially bypassing access controls.",
+      "finding": "        out = {name: getattr(eff, name).enabled for name in SEVERITIES}",
+      "finding_id": "finding-f69567b626514c91a8d50c56f923218c",
+      "id": "AST7",
+      "intent": null,
+      "location": {
+        "end_line": 321,
+        "file": "src/sentinel/action.py",
+        "start_line": 321
+      },
+      "pattern": "Dynamic attribute access via getattr()",
+      "remediation": "Replace dynamic getattr() with explicit attribute access or a dictionary lookup with an allowlist of permitted attributes.",
+      "severity": "LOW",
+      "tags": [
+        "Dangerous Code Execution"
+      ]
+    }
+  ],
+  "metadata": {
+    "filtering_mode": "heuristic",
+    "has_executable_scripts": true,
+    "inference_usage": [],
+    "llm_available": false,
+    "llm_requested": false,
+    "meta_analysis_applied": false,
+    "skillspector_version": "2.9.6"
+  },
+  "risk_assessment": {
+    "recommendation": "DO_NOT_INSTALL",
+    "score": 100,
+    "severity": "CRITICAL"
+  },
+  "skill": {
+    "name": "unknown",
+    "scanned_at": "2026-09-06T06:32:33.999486+00:00",
+    "source": "/tmp/claude-1000/-home-tav/142054fa-4b1a-4789-9a95-6de00fc3ad15/scratchpad/export"
+  },
+  "suppressed": [],
+  "suppressed_count": 0
+}

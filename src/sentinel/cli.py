@@ -70,5 +70,50 @@ def action_main(argv: list[str] | None = None) -> int:
     return _action_main(argv)
 
 
+def scan_main(argv: list[str] | None = None) -> int:
+    """sentinel-scan <root> [--json] [--timeout N]
+
+    Runs SkillSpector over root in a sandbox, writes a sanitized report under
+    state_dir()/scans/<tree_hash>.json, and prints the parsed ScanResult.
+    Deferred import: keeps sentinel.scan (which shells out and, if OSV
+    lookups are ever enabled, would touch the network) out of every other
+    console script's import path, and out of the daemon's entirely -- the
+    daemon never imports sentinel.cli at all, let alone sentinel.scan.
+    """
+    import dataclasses
+    import json
+
+    from sentinel.scan import DEFAULT_TIMEOUT_S, ScannerNotInstalled, run_scan
+
+    parser = argparse.ArgumentParser(prog="sentinel-scan")
+    parser.add_argument("root", type=Path, help="Directory to scan")
+    parser.add_argument("--json", action="store_true", help="Print the result as JSON")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT_S,
+        help=f"Scanner timeout in seconds (default: {DEFAULT_TIMEOUT_S:g})",
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        result = run_scan(args.root, timeout=args.timeout)
+    except ScannerNotInstalled as exc:
+        print(str(exc))
+        return 2
+    except NotADirectoryError as exc:
+        print(f"sentinel-scan: {exc}")
+        return 1
+    except ValueError as exc:
+        print(f"sentinel-scan: {exc}")
+        return 1
+
+    if args.json:
+        print(json.dumps(dataclasses.asdict(result), sort_keys=True))
+    else:
+        print(result)
+    return 0
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
