@@ -205,3 +205,33 @@ def test_path_outside_state_dir_is_rejected(tmp_path, monkeypatch):
         assert ledger.check(outside) == "foreign"
     finally:
         sock.close()
+
+
+def test_is_ignored_state_file():
+    from sentinel.statewatch import is_ignored_state_file
+
+    for name in (
+        "alerts.lock",
+        "alerts.jsonl.1",
+        "control.sock",
+        ".cli-writes",
+        "alerts.jsonl.tmp",
+        "allowlist.json.tmp",
+        "allowlist-session.json.tmp",
+        "watchlist.json.tmp",
+        "pause_until.tmp",
+        "health.json.tmp",
+    ):
+        assert is_ignored_state_file(name) is True
+
+    for name in (
+        "alerts.jsonl",
+        "allowlist.json",
+        "allowlist-session.json",
+        "pause_until",
+        "watchlist.json",
+        "notify-prefs.json",
+        "health.json",
+    ):
+        assert is_ignored_state_file(name) is False
+

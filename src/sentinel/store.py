@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 from collections.abc import Iterator
@@ -11,6 +12,7 @@ from pathlib import Path
 from sentinel.fsutil import ensure_private_dir, open_private, write_private_atomic
 from sentinel.models import STATUSES, Alert
 from sentinel.paths import state_dir
+from sentinel.statewatch import announce_write
 
 ALERTS_FILENAME = "alerts.jsonl"
 LOCK_FILENAME = "alerts.lock"
@@ -127,4 +129,13 @@ def update_alert_status(id: str, status: str) -> None:
         if not found:
             raise KeyError(id)
         text = "".join(json.dumps(a.to_dict(), separators=(",", ":")) + "\n" for a in rows)
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        try:
+            announce_write(path, digest)
+        except Exception:
+            pass
         write_private_atomic(path, text)
+        try:
+            announce_write(path, digest)
+        except Exception:
+            pass

@@ -15,6 +15,7 @@ over and updates in place; a quiet ``quiet_sec`` resets the burst.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -31,6 +32,7 @@ from sentinel.action import is_paused
 from sentinel.fsutil import write_private_atomic
 from sentinel.models import Alert
 from sentinel.paths import default_config_path, state_dir
+from sentinel.statewatch import announce_write
 
 PREFS_FILENAME = "notify-prefs.json"
 BURST_FILENAME = "notify-burst.json"
@@ -167,7 +169,17 @@ def write_prefs(severities: Mapping[str, bool], path: Path | None = None) -> dic
         "severities": {k: current[k] for k in SEVERITIES if k in current},
         "updated": datetime.now(timezone.utc).isoformat(),
     }
-    write_private_atomic(p, json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
+    content = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    try:
+        announce_write(p, digest)
+    except Exception:
+        pass
+    write_private_atomic(p, content)
+    try:
+        announce_write(p, digest)
+    except Exception:
+        pass
     return current
 
 
