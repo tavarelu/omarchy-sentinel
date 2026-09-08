@@ -9,11 +9,17 @@ import shutil
 import subprocess
 import sys
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sentinel.allowlist import SCOPES, allowlist_path, approve, fingerprint, session_path
+from sentinel.allowlist import (
+    SCOPES,
+    allowlist_path,
+    approve_many,
+    fingerprint,
+    session_path,
+)
 from sentinel.fsutil import write_private_atomic
 from sentinel.keys import alert_flag_set, approval_prefix
 from sentinel.investigate import action_lines, page_detail
@@ -26,7 +32,13 @@ from sentinel.kill import (
 from sentinel.models import Alert
 from sentinel.paths import default_config_path, state_dir
 from sentinel.statewatch import announce_write, sha256_file
-from sentinel.store import alerts_path, find_alert, iter_alerts, update_alert_status
+from sentinel.store import (
+    alerts_path,
+    find_alert,
+    iter_alerts,
+    update_alert_status,
+    update_alert_statuses,
+)
 
 PAUSE_FILENAME = "pause_until"
 DEFAULT_PAUSE_MAX = timedelta(hours=24)
@@ -219,32 +231,99 @@ def _set_status(alert_id: str, status: str) -> None:
     _announce(alerts_path())
 
 
-def cmd_approve(alert_id: str, scope: str) -> int:
-    try:
-        alert = get_alert(alert_id)
-    except KeyError:
-        print(f"unknown alert: {alert_id}", file=sys.stderr)
-        return 1
+def _set_status_many(alert_ids: Sequence[str], status: str) -> list[str]:
+    """Same, for a bulk action: one rewrite and one announcement for all of them."""
+    changed = update_alert_statuses(alert_ids, status)
+    _announce(alerts_path())
+    return changed
+
+
+def open_alert_ids() -> list[str]:
+    """Ids of every alert still awaiting a decision, in log order."""
+    return [a.id for a in iter_alerts() if a.status == "open"]
+
+
+def _resolve_targets(
+    alert_ids: str | Sequence[str],
+    all_open: bool,
+) -> list[str] | None:
+    """Work out which alerts a command applies to.
+
+    --all means "every alert still open", which is what the panel's bulk
+    buttons act on; otherwise the explicit ids win. Returns None when the
+    caller gave nothing to act on, so each command can report its own error.
+
+    A bare id string is accepted alongside a list: `str` is itself a
+    Sequence[str], so taking one by mistake would otherwise iterate it one
+    character at a time and report every letter as an unknown alert.
+    """
+    if all_open:
+        return open_alert_ids()
+    if isinstance(alert_ids, str):
+        alert_ids = [alert_ids]
+    return [str(i) for i in alert_ids] or None
+
+
+def cmd_approve(
+    alert_ids: str | Sequence[str],
+    scope: str,
+    *,
+    all_open: bool = False,
+) -> int:
     if scope not in SCOPES:
         print(f"invalid scope: {scope}", file=sys.stderr)
         return 1
-    prefix = approval_prefix(alert, scope)
-    fp = fingerprint(alert.rule, alert.basename, alert_flag_set(alert), prefix)
-    approve(fp, scope, prefix)  # type: ignore[arg-type]
+    targets = _resolve_targets(alert_ids, all_open)
+    if targets is None:
+        print("approve: no alert id given (pass ids or --all)", file=sys.stderr)
+        return 2
+    if not targets:
+        print("nothing to approve: no open alerts")
+        return 0
+
+    # Resolve every fingerprint first so one unknown id fails the whole batch
+    # before anything is written, rather than half-applying it.
+    pending: list[tuple[str, str, str]] = []
+    for alert_id in targets:
+        try:
+            alert = get_alert(alert_id)
+        except KeyError:
+            print(f"unknown alert: {alert_id}", file=sys.stderr)
+            return 1
+        prefix = approval_prefix(alert, scope)
+        fp = fingerprint(alert.rule, alert.basename, alert_flag_set(alert), prefix)
+        pending.append((fp, prefix, alert.id))
+
+    approve_many([(fp, scope, prefix) for fp, prefix, _ in pending])  # type: ignore[arg-type]
     _announce_allowlist()
-    _set_status(alert.id, "approved")
-    print(f"approved {alert.id} scope={scope} prefix={prefix or '(any)'}")
+    changed = _set_status_many([a for _, _, a in pending], "approved")
+    if len(pending) == 1:
+        fp, prefix, alert_id = pending[0]
+        print(f"approved {alert_id} scope={scope} prefix={prefix or '(any)'}")
+    else:
+        print(f"approved {len(changed)} alerts scope={scope}")
     return 0
 
 
-def cmd_dismiss(alert_id: str) -> int:
-    try:
-        get_alert(alert_id)
-    except KeyError:
-        print(f"unknown alert: {alert_id}", file=sys.stderr)
-        return 1
-    _set_status(alert_id, "dismissed")
-    print(f"dismissed {alert_id}")
+def cmd_dismiss(alert_ids: str | Sequence[str], *, all_open: bool = False) -> int:
+    targets = _resolve_targets(alert_ids, all_open)
+    if targets is None:
+        print("dismiss: no alert id given (pass ids or --all)", file=sys.stderr)
+        return 2
+    if not targets:
+        print("nothing to dismiss: no open alerts")
+        return 0
+    for alert_id in targets:
+        try:
+            get_alert(alert_id)
+        except KeyError:
+            print(f"unknown alert: {alert_id}", file=sys.stderr)
+            return 1
+    changed = _set_status_many(targets, "dismissed")
+    if len(targets) == 1:
+        print(f"dismissed {targets[0]}")
+    else:
+        print(f"dismissed {len(changed)} alerts")
     return 0
 
 
@@ -324,13 +403,13 @@ def _dispatch_menu_choice(alert_id: str, choice: str) -> int:
     auto-kill, AGENTS.md invariant 4).
     """
     if choice == "1":
-        return cmd_approve(alert_id, "session")
+        return cmd_approve([alert_id], "session")
     if choice == "2":
-        return cmd_approve(alert_id, "24h")
+        return cmd_approve([alert_id], "24h")
     if choice == "3":
-        return cmd_approve(alert_id, "this-repo")
+        return cmd_approve([alert_id], "this-repo")
     if choice == "4":
-        return cmd_approve(alert_id, "forever")
+        return cmd_approve([alert_id], "forever")
     if choice == "5":
         return cmd_kill(alert_id, session=False, yes=False)
     if choice == "6":
@@ -340,7 +419,7 @@ def _dispatch_menu_choice(alert_id: str, choice: str) -> int:
     if choice == "8":
         return cmd_summarize(alert_id)
     if choice == "9":
-        return cmd_dismiss(alert_id)
+        return cmd_dismiss([alert_id])
     if choice == "0":
         return 0
     print(f"nothing done: unrecognized choice {choice!r}", file=sys.stderr)
@@ -524,6 +603,31 @@ def cmd_open(alert_id: str, *, logs: bool = False) -> int:
     return 0
 
 
+def no_target_reason(alert: Alert) -> str:
+    """Explain why a kill has no PID to act on, so the panel and the CLI agree.
+
+    Filesystem rules are raised from inotify, which reports the path that
+    changed but never the process that changed it, so those alerts carry no
+    pids and can never be killed. Process rules come from the launch ledger
+    and do carry a pid, so an empty plan there means the process is simply
+    gone (exited, or its pid was recycled and the start time no longer
+    matches).
+    """
+    if not alert.pids:
+        return (
+            f"refusing: alert {alert.id} records no process id, so there is nothing "
+            f"to kill. Rule {alert.rule} is raised from a filesystem event, which "
+            "identifies the file that was written but not the writer. Use "
+            "`investigate` to see the evidence, `approve` to allowlist the "
+            "fingerprint, or `dismiss` to close the alert."
+        )
+    return (
+        f"no live target: every process recorded on alert {alert.id} has already "
+        "exited or had its pid recycled. Leaving the alert open; use `dismiss` to "
+        "close it."
+    )
+
+
 def cmd_kill(alert_id: str, *, session: bool, yes: bool, force_stale: bool = False) -> int:
     try:
         alert = get_alert(alert_id)
@@ -539,10 +643,10 @@ def cmd_kill(alert_id: str, *, session: bool, yes: bool, force_stale: bool = Fal
             file=sys.stderr,
         )
         return 1
-    precious = cwd_is_precious(alert.cwd)
-    if not confirm_kill(yes=yes, session=session, precious=precious):
-        return 1
     mode = "session" if session else "child"
+    # Build the plan *before* asking for consent. A kill with no target must
+    # never prompt, never run, and never mark the alert "killed": reporting a
+    # kill that did not happen is the worst failure mode a watchdog has.
     try:
         plan = plan_kill(
             alert.pids,
@@ -553,7 +657,13 @@ def cmd_kill(alert_id: str, *, session: bool, yes: bool, force_stale: bool = Fal
     except PermissionError as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    print("killing pids: " + (", ".join(str(p) for p in plan) if plan else "(none)"))
+    if not plan:
+        print(no_target_reason(alert), file=sys.stderr)
+        return 1
+    precious = cwd_is_precious(alert.cwd)
+    if not confirm_kill(yes=yes, session=session, precious=precious):
+        return 1
+    print("killing pids: " + ", ".join(str(p) for p in plan))
     execute_kill(plan)
     _set_status(alert.id, "killed")
     print(f"killed {alert.id}")
@@ -577,7 +687,13 @@ def action_main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
 
     approve_p = sub.add_parser("approve", help="Allowlist the alert fingerprint")
-    approve_p.add_argument("alert_id")
+    approve_p.add_argument("alert_id", nargs="*", help="One or more alert ids")
+    approve_p.add_argument(
+        "--all",
+        dest="all_open",
+        action="store_true",
+        help="Apply to every alert still open",
+    )
     approve_p.add_argument(
         "--scope",
         choices=sorted(SCOPES),
@@ -616,7 +732,13 @@ def action_main(argv: list[str] | None = None) -> int:
         "dismiss",
         help="Close without allowlisting; final for that process instance (one alert per instance)",
     )
-    dis_p.add_argument("alert_id")
+    dis_p.add_argument("alert_id", nargs="*", help="One or more alert ids")
+    dis_p.add_argument(
+        "--all",
+        dest="all_open",
+        action="store_true",
+        help="Apply to every alert still open",
+    )
 
     menu_p = sub.add_parser("menu", help="Show per-alert actions")
     menu_p.add_argument("alert_id")
@@ -649,7 +771,7 @@ def action_main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
     if args.command == "approve":
-        return cmd_approve(args.alert_id, args.scope)
+        return cmd_approve(args.alert_id, args.scope, all_open=args.all_open)
     if args.command == "kill":
         return cmd_kill(args.alert_id, session=args.session, yes=args.yes, force_stale=args.force_stale)
     if args.command == "investigate":
@@ -657,7 +779,7 @@ def action_main(argv: list[str] | None = None) -> int:
     if args.command == "summarize":
         return cmd_summarize(args.alert_id)
     if args.command == "dismiss":
-        return cmd_dismiss(args.alert_id)
+        return cmd_dismiss(args.alert_id, all_open=args.all_open)
     if args.command == "menu":
         return cmd_menu(args.alert_id)
     if args.command == "list":
