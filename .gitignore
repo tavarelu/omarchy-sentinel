@@ -6,6 +6,7 @@ __pycache__/
 .superpowers/
 .worktrees/
 .claude/
+graphify-out/
 dist/
 build/
 
