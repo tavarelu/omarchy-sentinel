@@ -1,3 +1,0 @@
-description = "Read-only security auditor: verifies the six security invariants in AGENTS.md against the diff"
-default_capability_mode = "read-only"
-prompt_file = ".grok/prompts/auditor.md"
