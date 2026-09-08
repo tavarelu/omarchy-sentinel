@@ -1,3 +1,0 @@
-description = "Read-only reviewer: checks the diff against the packet's Changes and Tests sections and reports gaps"
-default_capability_mode = "read-only"
-prompt_file = ".grok/prompts/reviewer.md"
