@@ -50,7 +50,7 @@ def test_dry_run_is_the_default_and_creates_nothing(tmp_path):
     assert not bin_dir.exists() or list(bin_dir.iterdir()) == []
 
 
-def test_apply_symlinks_all_three_clis(tmp_path):
+def test_apply_symlinks_all_clis(tmp_path):
     venv = _fake_venv(tmp_path)
     bin_dir = tmp_path / "bin"
     result = _run(venv, bin_dir, "--apply")

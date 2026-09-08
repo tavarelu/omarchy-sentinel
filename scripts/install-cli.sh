@@ -16,7 +16,7 @@ ID="$(jq -r '.id // "tav.sentinel"' "$ROOT/manifest.json" 2>/dev/null || echo ta
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/$ID"
 VENV="${SENTINEL_VENV:-$DATA_DIR/venv}"
 BIN_DIR="${SENTINEL_BIN_DIR:-$HOME/.local/bin}"
-CLIS=(sentinel sentinel-action sentinel-scout)
+CLIS=(sentinel sentinel-action sentinel-scout sentinel-scan)
 
 APPLY=0
 for a in "$@"; do

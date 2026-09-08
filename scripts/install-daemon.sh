@@ -48,7 +48,7 @@ do_or_show "$VENV/bin/pip" -q install -e "$ROOT"
 
 say "2. CLIs on PATH"
 do_or_show mkdir -p "$BIN_DIR"
-for cli in sentinel sentinel-action sentinel-scout; do
+for cli in sentinel sentinel-action sentinel-scout sentinel-scan; do
   do_or_show ln -sfn "$VENV/bin/$cli" "$BIN_DIR/$cli"
 done
 

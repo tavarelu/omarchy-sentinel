@@ -157,7 +157,7 @@ shows the steps.
 ```sh
 systemctl --user disable --now sentinel.service sentinel-inventory.timer
 omarchy plugin remove tav.sentinel
-rm -rf ~/.local/share/tav.sentinel ~/.local/bin/sentinel ~/.local/bin/sentinel-action ~/.local/bin/sentinel-scout
+rm -rf ~/.local/share/tav.sentinel ~/.local/bin/sentinel ~/.local/bin/sentinel-action ~/.local/bin/sentinel-scout ~/.local/bin/sentinel-scan
 rm -f ~/.config/systemd/user/sentinel*.service ~/.config/systemd/user/sentinel*.timer && systemctl --user daemon-reload
 ```
 
