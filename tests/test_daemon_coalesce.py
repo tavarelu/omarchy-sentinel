@@ -672,7 +672,7 @@ def test_pause_until_write_is_operational_when_recorded(tmp_path, monkeypatch):
 
     d = _daemon(tmp_path, monkeypatch, self_paths=[str(state_dir())], watch_paths=[])
     state_dir().mkdir(parents=True, exist_ok=True)
-    for name in ("pause_until", "alerts.lock", "alerts.jsonl.tmp", "alerts.jsonl.1", "notify-prefs.json"):
+    for name in ("pause_until", "notify-prefs.json"):
         p = state_dir() / name
         p.write_text("2020-01-01T00:00:00+00:00\n" if name == "pause_until" else "x")
         d._ledger.record(p)
@@ -687,7 +687,7 @@ def test_pause_until_write_unrecorded_raises_foreign(tmp_path, monkeypatch):
 
     d = _daemon(tmp_path, monkeypatch, self_paths=[str(state_dir())], watch_paths=[])
     state_dir().mkdir(parents=True, exist_ok=True)
-    names = ("pause_until", "alerts.lock", "alerts.jsonl.tmp", "alerts.jsonl.1", "notify-prefs.json")
+    names = ("pause_until", "notify-prefs.json")
     for name in names:
         p = state_dir() / name
         p.write_text("2020-01-01T00:00:00+00:00\n" if name == "pause_until" else "x")
@@ -695,6 +695,31 @@ def test_pause_until_write_unrecorded_raises_foreign(tmp_path, monkeypatch):
     rows = list(iter_alerts())
     assert len(rows) == len(names)
     assert all(r.rule == "R-SELF" and r.evidence.get("event") == "foreign-write" for r in rows)
+
+
+def test_transient_and_tmp_files_in_state_dir_are_ignored(tmp_path, monkeypatch):
+    """Temporary staging files (.tmp), lock files, rotated logs, and sockets
+    are ignored outright and never raise false R-SELF alerts."""
+    from sentinel.paths import state_dir
+
+    d = _daemon(tmp_path, monkeypatch, self_paths=[str(state_dir())], watch_paths=[])
+    state_dir().mkdir(parents=True, exist_ok=True)
+    names = (
+        "alerts.lock",
+        "alerts.jsonl.tmp",
+        "alerts.jsonl.1",
+        "allowlist.json.tmp",
+        "allowlist-session.json.tmp",
+        "watchlist.json.tmp",
+        "pause_until.tmp",
+        "notify-prefs.json.tmp",
+        "health.json.tmp",
+    )
+    for name in names:
+        p = state_dir() / name
+        p.write_text("x")
+        d.handle_write(p)
+    assert list(iter_alerts()) == []
 
 
 # --------------------------------------------------------- W3-07 self-defense

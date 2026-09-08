@@ -31,9 +31,30 @@ from sentinel.paths import state_dir
 
 CONTROL_SOCK_NAME = "control.sock"
 NONCE_FILENAME = ".cli-writes"
+IGNORED_STATE_NAMES = frozenset(
+    {
+        "alerts.lock",
+        "alerts.jsonl.1",
+        CONTROL_SOCK_NAME,
+        NONCE_FILENAME,
+    }
+)
 _ANNOUNCE_TIMEOUT = 0.2
 _RECV_BUFSIZE = 65536
 _ANCILLARY_SIZE = socket.CMSG_SPACE(struct.calcsize("3i"))
+
+
+def is_ignored_state_file(path: Path | str) -> bool:
+    """True for transient files in state_dir that Sentinel itself manages and
+    which must never be classified through the state ledger or evaluate_write:
+    temporary staging files (.tmp), locks, rotated logs, and sockets/nonces."""
+    p = Path(path)
+    name = p.name
+    if name.endswith(".tmp"):
+        return True
+    if name in IGNORED_STATE_NAMES:
+        return True
+    return False
 
 
 def control_socket_path() -> Path:

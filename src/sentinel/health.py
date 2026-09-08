@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -15,6 +16,7 @@ from typing import Any
 
 from sentinel.fsutil import ensure_private_dir, write_private_atomic
 from sentinel.paths import state_dir
+from sentinel.statewatch import announce_write
 
 HEALTH_FILENAME = "health.json"
 DEFAULT_STICKY_THRESHOLD = 3
@@ -160,7 +162,17 @@ def write_health_report(report: HealthReport, *, source: str | None = None) -> P
         payload["source"] = source
     if not report.daemon_active:
         payload["warnings"] = ["sentinel.service inactive (warn only)"]
-    write_private_atomic(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    content = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    try:
+        announce_write(path, digest)
+    except Exception:
+        pass
+    write_private_atomic(path, content)
+    try:
+        announce_write(path, digest)
+    except Exception:
+        pass
     return path
 
 

@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from sentinel.fsutil import write_private_atomic
 from sentinel.paths import state_dir
+from sentinel.statewatch import announce_write
 
 Scope = Literal["session", "24h", "this-repo", "forever"]
 SCOPES = frozenset({"session", "24h", "this-repo", "forever"})
@@ -59,7 +60,17 @@ def _load_file(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def _save_file(path: Path, entries: dict[str, dict[str, Any]]) -> None:
-    write_private_atomic(path, json.dumps({"entries": entries}, separators=(",", ":")))
+    content = json.dumps({"entries": entries}, separators=(",", ":"))
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    try:
+        announce_write(path, digest)
+    except Exception:
+        pass
+    write_private_atomic(path, content)
+    try:
+        announce_write(path, digest)
+    except Exception:
+        pass
 
 
 def _load_persisted() -> dict[str, dict[str, Any]]:

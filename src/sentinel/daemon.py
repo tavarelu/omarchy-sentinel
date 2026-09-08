@@ -34,7 +34,13 @@ from sentinel.paths import config_dir, default_config_path, state_dir
 from sentinel.procinfo import instance_key, read_starttime
 from sentinel.rules import evaluate_process, evaluate_write
 from sentinel.scout import WATCHLIST_FILENAME, scout, write_watchlist
-from sentinel.statewatch import StateLedger, consume_cli_writes, create_control_socket, drain_control_socket
+from sentinel.statewatch import (
+    StateLedger,
+    consume_cli_writes,
+    create_control_socket,
+    drain_control_socket,
+    is_ignored_state_file,
+)
 from sentinel.store import ALERTS_FILENAME, alerts_path, append_alert
 from sentinel.wrap_record import LAUNCHES_FILENAME, launch_to_alert, launches_path
 
@@ -63,9 +69,6 @@ OPERATIONAL_NAMES = frozenset(
         "allowlist-session.json",
         "watchlist.json",
         "pause_until",
-        "alerts.lock",
-        "alerts.jsonl.tmp",
-        "alerts.jsonl.1",
         "notify-prefs.json",
         "notify-burst.json",
     }
@@ -590,6 +593,8 @@ class Daemon:
         writer_cmdline: Sequence[str] | None = None,
     ) -> None:
         path = Path(path)
+        if is_ignored_state_file(path):
+            return
         if path.name in OPERATIONAL_NAMES or _is_scan_report(path):
             # Writer identity is unavailable from inotify and the ledger is a
             # more precise signal for Sentinel's own files, so these are
@@ -652,6 +657,7 @@ class Daemon:
         return None
 
     def _classify_pause_write(self, path: Path) -> None:
+        self._drain_control_socket()
         verdict = self._ledger.check(path)
         over = self._pause_over_cap_value(path)
         if over is not None:
@@ -661,6 +667,9 @@ class Daemon:
                 {"event": "pause-over-cap", "until": over, "path": str(path)}, path
             )
             return
+        if verdict == "ours":
+            self._ledger.record(path)
+            return
         if verdict != "foreign":
             return
         self._raise_tamper_alert({"event": "foreign-write", "path": str(path)}, path)
@@ -669,8 +678,12 @@ class Daemon:
         if path.name == PAUSE_FILENAME:
             self._classify_pause_write(path)
             return
+        self._drain_control_socket()
         prev_size = self._ledger.last_size(path)
         verdict = self._ledger.check(path)
+        if verdict == "ours":
+            self._ledger.record(path)
+            return
         if verdict != "foreign":
             return
         evidence: dict[str, Any] = {"event": "foreign-write", "path": str(path)}
@@ -843,6 +856,8 @@ class Daemon:
         if path.name == LAUNCHES_FILENAME:
             self.consume_launches()
             return
+        if is_ignored_state_file(path):
+            return
         # OPERATIONAL_NAMES writes are no longer ignored here either (W3-07
         # R9): handle_write now classifies them through the ledger.
         self.handle_write(path)
@@ -950,10 +965,10 @@ class Daemon:
                     ready, _, _ = select.select(fds, [], [], timeout)
                     if self._stopped():
                         break
-                    if ino is not None and ino.fd in ready:
-                        self._drain_inotify()
                     if self._control_sock is not None and self._control_sock.fileno() in ready:
                         self._drain_control_socket()
+                    if ino is not None and ino.fd in ready:
+                        self._drain_inotify()
                 elif self._stop is not None:
                     self._stop.wait(timeout)
                 else:

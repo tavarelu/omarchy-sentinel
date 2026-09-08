@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 .superpowers/
 .worktrees/
+.claude/
 dist/
 build/
 
