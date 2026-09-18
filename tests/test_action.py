@@ -366,12 +366,62 @@ def test_kill_passes_recorded_starttime(monkeypatch, tmp_path):
 
     def fake_plan(pids, child_pids=None, mode="child", **kw):
         seen.update(kw)
-        return []
+        # Must be non-empty: an empty plan is now a refusal, not a silent success.
+        return [101]
 
     monkeypatch.setattr("sentinel.action.plan_kill", fake_plan)
     monkeypatch.setattr("sentinel.action.execute_kill", lambda plan: None)
     assert action_main([alert.id, "kill", "--yes"]) == 0
     assert seen["expected_starttime"] == {101: 500}
+
+
+def test_kill_refuses_alert_with_no_pids(monkeypatch, tmp_path, capsys):
+    """A write-rule alert carries no pid, so kill must refuse instead of
+    reporting success. inotify names the file that changed, never the writer."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    alert = _alert(rule="R-HOOK-WRITE", pids=[], evidence={"path": "/tmp/x"})
+    append_alert(alert)
+    killed: list = []
+    monkeypatch.setattr("sentinel.action.execute_kill", lambda plan: killed.append(plan))
+    assert action_main([alert.id, "kill", "--yes"]) == 1
+    err = capsys.readouterr().err
+    assert "records no process id" in err
+    assert "R-HOOK-WRITE" in err
+    assert killed == []
+    # The alert must stay open: nothing was killed, so nothing is resolved.
+    assert list(iter_alerts())[0].status == "open"
+
+
+def test_kill_refuses_when_every_pid_is_gone(monkeypatch, tmp_path, capsys):
+    """Recorded pids that have exited or been recycled leave an empty plan."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    alert = _alert(evidence={"flag": "--yolo", "flags": ["--yolo"], "starttime": 500})
+    append_alert(alert)
+    killed: list = []
+    monkeypatch.setattr("sentinel.action.plan_kill", lambda *a, **k: [])
+    monkeypatch.setattr("sentinel.action.execute_kill", lambda plan: killed.append(plan))
+    assert action_main([alert.id, "kill", "--yes"]) == 1
+    assert "no live target" in capsys.readouterr().err
+    assert killed == []
+    assert list(iter_alerts())[0].status == "open"
+
+
+def test_kill_with_no_target_never_prompts(monkeypatch, tmp_path):
+    """The plan is built before consent is asked, so an unkillable alert must
+    not put a y/N prompt in front of the user at all."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    alert = _alert(rule="R-SELF", pids=[], evidence={"path": "/tmp/x"})
+    append_alert(alert)
+    asked: list = []
+
+    def fake_confirm(**kwargs):
+        asked.append(kwargs)
+        return True
+
+    monkeypatch.setattr("sentinel.action.confirm_kill", fake_confirm)
+    monkeypatch.setattr("sentinel.action.execute_kill", lambda plan: None)
+    assert action_main([alert.id, "kill"]) == 1
+    assert asked == []
 
 
 def test_notify_prints_effective_policy_and_sources(monkeypatch, tmp_path, capsys):
@@ -618,3 +668,60 @@ def test_menu_interactive_kill_session_precious_still_requires_tty_phrase(monkey
     assert rc == 1
     assert executed == []
     assert list(iter_alerts())[0].status == "open"
+
+
+def test_approve_many_ids_in_one_call(monkeypatch, tmp_path):
+    """The panel's "approve checked" sends every id at once so the allowlist and
+    the alert log are each rewritten once, not once per alert."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    alerts = [_alert(cwd=f"/home/user/Work/p{i}") for i in range(3)]
+    for a in alerts:
+        append_alert(a)
+    ids = [a.id for a in alerts]
+    assert action_main(["approve", *ids, "--scope", "this-repo"]) == 0
+    assert [a.status for a in iter_alerts()] == ["approved"] * 3
+
+
+def test_approve_all_targets_only_open_alerts(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    keep = _alert(cwd="/home/user/Work/kept")
+    keep.status = "dismissed"
+    append_alert(keep)
+    live = [_alert(cwd=f"/home/user/Work/a{i}") for i in range(2)]
+    for a in live:
+        append_alert(a)
+    assert action_main(["approve", "--all", "--scope", "this-repo"]) == 0
+    by_id = {a.id: a.status for a in iter_alerts()}
+    assert by_id[keep.id] == "dismissed"  # already closed, left alone
+    assert all(by_id[a.id] == "approved" for a in live)
+
+
+def test_dismiss_all_closes_every_open_alert(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    alerts = [_alert(cwd=f"/home/user/Work/d{i}") for i in range(3)]
+    for a in alerts:
+        append_alert(a)
+    assert action_main(["dismiss", "--all"]) == 0
+    assert [a.status for a in iter_alerts()] == ["dismissed"] * 3
+
+
+def test_bulk_approve_is_atomic_on_unknown_id(monkeypatch, tmp_path, capsys):
+    """One bad id must fail the whole batch before anything is written, rather
+    than approving half the selection and leaving the rest open."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    good = _alert()
+    append_alert(good)
+    assert action_main(["approve", good.id, "does-not-exist"]) == 1
+    assert "unknown alert: does-not-exist" in capsys.readouterr().err
+    assert [a.status for a in iter_alerts()] == ["open"]
+
+
+def test_bulk_on_empty_selection_is_not_an_error(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    closed = _alert()
+    closed.status = "approved"
+    append_alert(closed)
+    assert action_main(["dismiss", "--all"]) == 0
+    assert "no open alerts" in capsys.readouterr().out
+    assert action_main(["approve"]) == 2
+    assert "no alert id given" in capsys.readouterr().err

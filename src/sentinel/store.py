@@ -5,7 +5,7 @@ import fcntl
 import hashlib
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -113,6 +113,25 @@ def find_alert(alert_id: str) -> tuple[int, Alert] | None:
         return None
 
 
+def _rewrite_alerts(path: Path, rows: list[Alert]) -> None:
+    """Write the whole log back, announcing the digest either side of the write.
+
+    Call with the store lock held. The announcement before and after is what
+    lets the daemon recognise this as Sentinel's own write rather than tamper.
+    """
+    text = "".join(json.dumps(a.to_dict(), separators=(",", ":")) + "\n" for a in rows)
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    try:
+        announce_write(path, digest)
+    except Exception:
+        pass
+    write_private_atomic(path, text)
+    try:
+        announce_write(path, digest)
+    except Exception:
+        pass
+
+
 def update_alert_status(id: str, status: str) -> None:
     if status not in STATUSES:
         raise ValueError(f"invalid status: {status!r}")
@@ -128,14 +147,33 @@ def update_alert_status(id: str, status: str) -> None:
                 found = True
         if not found:
             raise KeyError(id)
-        text = "".join(json.dumps(a.to_dict(), separators=(",", ":")) + "\n" for a in rows)
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        try:
-            announce_write(path, digest)
-        except Exception:
-            pass
-        write_private_atomic(path, text)
-        try:
-            announce_write(path, digest)
-        except Exception:
-            pass
+        _rewrite_alerts(path, rows)
+
+
+def update_alert_statuses(ids: Iterable[str], status: str) -> list[str]:
+    """Set one status on many alerts in a single rewrite of alerts.jsonl.
+
+    update_alert_status() rewrites the entire log per call, so a bulk action
+    driven one alert at a time is quadratic and floods the daemon's state
+    watcher with writes it must reconcile. Returns the ids actually found, so
+    the caller can report how many alerts it really changed.
+    """
+    if status not in STATUSES:
+        raise ValueError(f"invalid status: {status!r}")
+    wanted = {str(i) for i in ids}
+    if not wanted:
+        return []
+    path = _alerts_path()
+    with _locked():
+        if not path.exists():
+            return []
+        rows = list(iter_alerts())
+        changed: list[str] = []
+        for alert in rows:
+            if alert.id in wanted:
+                alert.status = status
+                changed.append(alert.id)
+        if not changed:
+            return []
+        _rewrite_alerts(path, rows)
+        return changed

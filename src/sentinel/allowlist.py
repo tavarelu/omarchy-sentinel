@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -139,7 +140,7 @@ def decide(
     return "allowed" if _entry_allows(entry, cwd, now) else "none"
 
 
-def approve(fp: str, scope: Scope, cwd_prefix: str) -> None:
+def _entry_for(scope: Scope, cwd_prefix: str) -> dict[str, Any]:
     if scope not in SCOPES:
         raise ValueError(f"invalid scope: {scope!r}")
     entry: dict[str, Any] = {
@@ -151,19 +152,45 @@ def approve(fp: str, scope: Scope, cwd_prefix: str) -> None:
         entry["expires_at"] = (
             datetime.now(timezone.utc) + timedelta(hours=24)
         ).isoformat()
-    if scope == "session":
+    return entry
+
+
+def approve(fp: str, scope: Scope, cwd_prefix: str) -> None:
+    approve_many([(fp, scope, cwd_prefix)])
+
+
+def approve_many(items: Sequence[tuple[str, Scope, str]]) -> None:
+    """Approve many fingerprints with a single write per allowlist file.
+
+    Approving one at a time reloads and rewrites the whole allowlist on every
+    call, which is quadratic over a panel full of alerts and emits a burst of
+    state writes the daemon then has to reconcile against its own ledger.
+    Grouping them keeps a bulk approve to one write of each file.
+    """
+    session_new: dict[str, dict[str, Any]] = {}
+    persisted_new: dict[str, dict[str, Any]] = {}
+    for fp, scope, cwd_prefix in items:
+        entry = _entry_for(scope, cwd_prefix)
+        if scope == "session":
+            session_new[fp] = entry
+        else:
+            persisted_new[fp] = entry
+    if session_new:
         session = _load_session()
-        session[fp] = entry
+        session.update(session_new)
         _save_file(_session_path(), session)
-        return
-    entries = _load_persisted()
-    entries[fp] = entry
-    _save_persisted(entries)
-    # Drop any stale session copy for the same fingerprint.
-    session = _load_session()
-    if fp in session:
-        del session[fp]
-        _save_file(_session_path(), session)
+    if persisted_new:
+        entries = _load_persisted()
+        entries.update(persisted_new)
+        _save_persisted(entries)
+        # Promoting a fingerprint to a longer scope must drop its stale session
+        # copy, or clearing the session later would silently revoke it.
+        session = _load_session()
+        stale = [fp for fp in persisted_new if fp in session]
+        if stale:
+            for fp in stale:
+                del session[fp]
+            _save_file(_session_path(), session)
 
 
 def is_allowed(fp: str, cwd: str, now: datetime | None = None) -> bool:

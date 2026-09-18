@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import QtQuick
+import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -48,6 +49,7 @@ Panel {
   property double nowMs: Date.now()
   property int cursor: 0
   property bool cursorActive: false
+  property bool enterHeld: false
 
   readonly property string daemonLine: !unitInstalled
     ? "Daemon not installed"
@@ -74,6 +76,7 @@ Panel {
 
   function close() {
     cursorActive = false
+    root.clearChecks()
     root.controller.hide()
   }
 
@@ -110,7 +113,12 @@ Panel {
   function approveHere(alert) { act(alert, "approve", ["--scope", "this-repo"]) }
   function approveAnywhere(alert) { act(alert, "approve", ["--scope", "forever"]) }
   function dismiss(alert) { act(alert, "dismiss") }
-  function kill(alert) { actInTerminal(alert, "kill") }
+  // Filesystem rules come from inotify, which names the file that changed but
+  // never the process that changed it, so those alerts carry no pids and there
+  // is nothing to kill. sentinel-action refuses them too; the button is disabled
+  // rather than hidden so the reason stays visible instead of the action vanishing.
+  function canKill(alert) { return !!alert && !!alert.pids && alert.pids.length > 0 }
+  function kill(alert) { if (root.canKill(alert)) actInTerminal(alert, "kill") }
   function investigate(alert) { actInTerminal(alert, "investigate") }
   function openLocation(alert) { if (hostWidget) hostWidget.openLocation(alert) }
   function openLogs() { if (hostWidget) hostWidget.openLogs() }
@@ -121,6 +129,73 @@ Panel {
     refreshLater.restart()
   }
   function showAll() { if (hostWidget) hostWidget.showAll(); refreshLater.restart() }
+
+  // ---- Bulk selection -------------------------------------------------
+  // checkedIds is a plain object used as a set. QML only re-evaluates bindings
+  // when a var property is reassigned, never when its contents are mutated in
+  // place, so every change below builds a fresh object.
+  property var checkedIds: ({})
+  readonly property int checkedCount: Object.keys(root.checkedIds).length
+
+  function isChecked(alert) {
+    return !!(alert && root.checkedIds[String(alert.id)])
+  }
+
+  function toggleCheck(alert) {
+    if (!alert) return
+    var next = {}
+    for (var key in root.checkedIds) next[key] = true
+    var id = String(alert.id)
+    if (next[id]) delete next[id]
+    else next[id] = true
+    root.checkedIds = next
+    root.armedBulk = ""
+  }
+
+  function clearChecks() {
+    root.checkedIds = ({})
+    root.armedBulk = ""
+  }
+
+  // Approving or dismissing every alert one CLI call at a time would rewrite
+  // alerts.jsonl once per alert and flood the daemon's state watcher, so the
+  // whole selection goes to sentinel-action in a single invocation.
+  function approveChecked() {
+    var ids = Object.keys(root.checkedIds)
+    if (ids.length === 0 || !hostWidget) return
+    hostWidget.run(["approve"].concat(ids).concat(["--scope", "this-repo"]))
+    root.clearChecks()
+    refreshLater.restart()
+  }
+
+  function approveAll() {
+    if (!hostWidget) return
+    hostWidget.run(["approve", "--all", "--scope", "this-repo"])
+    root.clearChecks()
+    refreshLater.restart()
+  }
+
+  function dismissAll() {
+    if (!hostWidget) return
+    hostWidget.run(["dismiss", "--all"])
+    root.clearChecks()
+    refreshLater.restart()
+  }
+
+  // "Approve all" and "Dismiss all" act on every open alert at once and cannot
+  // be undone from the panel, so they arm on the first click and only fire on
+  // the second. armedBulk holds the id of the armed button, "" when none is.
+  property string armedBulk: ""
+
+  function armBulk(which, run) {
+    if (root.armedBulk === which) {
+      root.armedBulk = ""
+      run()
+      return
+    }
+    root.armedBulk = which
+    disarmTimer.restart()
+  }
 
   function installDaemon() {
     Quickshell.execDetached(["omarchy-launch-floating-terminal-with-presentation", pluginDir + "/scripts/install-daemon.sh", "--apply"])
@@ -136,6 +211,28 @@ Panel {
     if (rows.length === 0) return
     cursorActive = true
     cursor = Math.max(0, Math.min(rows.length - 1, cursor + dy))
+    Qt.callLater(root.ensureCursorVisible)
+  }
+
+  // j/k drive a selection rather than the scroll position, so the viewport has
+  // to follow the cursor or the selected card walks off the bottom of the card.
+  function ensureCursorVisible() {
+    if (!cardRepeater || !panelFlick) return
+    var item = cardRepeater.itemAt(root.cursor)
+    if (!item) return
+    var pad = Style.spacing.lg
+    var maxY = Math.max(0, panelFlick.contentHeight - panelFlick.height)
+    if (item.y - pad < panelFlick.contentY)
+      panelFlick.contentY = Math.max(0, item.y - pad)
+    else if (item.y + item.height + pad > panelFlick.contentY + panelFlick.height)
+      panelFlick.contentY = Math.min(maxY, item.y + item.height + pad - panelFlick.height)
+  }
+
+  Timer {
+    id: disarmTimer
+    interval: 4000
+    repeat: false
+    onTriggered: root.armedBulk = ""
   }
 
   Timer {
@@ -267,8 +364,22 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveCursor(dy) }
-      onActivateRequested: root.investigate(root.selected())
-      onDeleteRequested: root.dismiss(root.selected())
+      // Enter emits returnRequested immediately before activateRequested and
+      // Space emits activateRequested alone, which is the only way to tell the
+      // two apart here. That keeps Enter on investigate and frees Space for the
+      // checkmark, which is what a list of checkboxes should answer to.
+      onReturnRequested: root.enterHeld = true
+      onActivateRequested: {
+        if (root.enterHeld) {
+          root.enterHeld = false
+          root.investigate(root.selected())
+        } else {
+          root.toggleCheck(root.selected())
+        }
+      }
+      // PanelKeyCatcher consumes x/X as deleteRequested and returns before it
+      // reaches onTextKey, so the footer's "x kill" binding must live here.
+      onDeleteRequested: root.kill(root.selected())
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
@@ -276,7 +387,6 @@ Panel {
         else if (t === "k") root.moveCursor(-1)
         else if (t === "a") root.approveHere(root.selected())
         else if (t === "A") root.approveAnywhere(root.selected())
-        else if (t === "x") root.kill(root.selected())
         else if (t === "i") root.investigate(root.selected())
         else if (t === "d") root.dismiss(root.selected())
         else if (t === "o") root.openLocation(root.selected())
@@ -286,365 +396,445 @@ Panel {
         else if (t === "p") root.pauseOneHour()
         else if (t === "r") root.refresh()
       }
-    }
 
-    Column {
-      id: column
-      width: parent.width
-      spacing: Style.spacing.lg
+      // fittedContentHeight clamps the card to the screen, so the alert list has
+      // to scroll inside it or everything past the fold is unreachable. It also
+      // has to live INSIDE the PanelKeyCatcher: Keys.priority BeforeItem only
+      // intercepts keys for descendants, so content declared as a sibling sits
+      // outside the key handler entirely.
+      Flickable {
+        id: panelFlick
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: column.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.VerticalFlick
+        interactive: contentHeight > height
+        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-      PanelHero {
-        width: parent.width
-        title: "Sentinel"
-        meta: root.daemonLine
-        detail: root.countLine
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        trailingControl: logsButton
-      }
+        Column {
+          id: column
+          width: panelFlick.width
+          spacing: Style.spacing.lg
 
-      // Daemon controls: only the one that applies is shown.
-      Row {
-        width: parent.width
-        spacing: Style.spacing.md
-        visible: !root.unitInstalled || root.daemonState !== "active"
+          PanelHero {
+            width: parent.width
+            title: "Sentinel"
+            meta: root.daemonLine
+            detail: root.countLine
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            trailingControl: logsButton
+          }
 
-        Button {
-          visible: !root.unitInstalled
-          text: "Install daemon"
-          iconText: "󰏗"
-          bordered: true
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          onClicked: root.installDaemon()
-        }
-
-        Button {
-          visible: root.unitInstalled && root.daemonState !== "active"
-          text: "Start daemon"
-          iconText: "󰐊"
-          bordered: true
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          onClicked: root.startDaemon()
-        }
-
-        Text {
-          anchors.verticalCenter: parent.verticalCenter
-          text: root.unitInstalled ? "Not watching until it runs." : "Runs as you, never root. Metadata only."
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.bodySmall
-        }
-      }
-
-      PanelSeparator {
-        width: parent.width
-        foreground: root.foreground
-      }
-
-      // ---- Severity filter. Shared with the daemon: off hides the alerts
-      //      here and stops their toasts. Tamper alerts ignore it.
-      Column {
-        width: parent.width
-        spacing: Style.spacing.sm
-
-        Text {
-          text: "SHOW AND TOAST"
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          font.letterSpacing: 1
-        }
-
-        Row {
-          id: filterRow
-          width: parent.width
-          spacing: Style.spacing.md
-          readonly property real cellWidth: (width - spacing * 2) / 3
-
-          Repeater {
-            model: ["high", "medium", "low"]
+          // Daemon controls: only the one that applies is shown.
+          Row {
+            width: parent.width
+            spacing: Style.spacing.md
+            visible: !root.unitInstalled || root.daemonState !== "active"
 
             Button {
-              required property string modelData
-              required property int index
-              width: filterRow.cellWidth
-              text: modelData.charAt(0).toUpperCase() + modelData.slice(1)
-              iconText: root.prefs[modelData] === false ? "󰄱" : "󰄵"
-              tooltipText: String(index + 1)
+              visible: !root.unitInstalled
+              text: "Install daemon"
+              iconText: "󰏗"
               bordered: true
-              selected: root.prefs[modelData] !== false
-              foreground: modelData === "high" ? root.urgent : root.foreground
+              foreground: root.foreground
               fontFamily: root.fontFamily
-              fontSize: Style.font.bodySmall
-              onClicked: root.toggleSeverity(modelData)
+              onClicked: root.installDaemon()
+            }
+
+            Button {
+              visible: root.unitInstalled && root.daemonState !== "active"
+              text: "Start daemon"
+              iconText: "󰐊"
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.startDaemon()
+            }
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.unitInstalled ? "Not watching until it runs." : "Runs as you, never root. Metadata only."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
             }
           }
-        }
 
-        Text {
-          width: parent.width
-          wrapMode: Text.WordWrap
-          text: "Off hides those alerts here and stops their toasts. Tamper alerts always show."
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-        }
-      }
-
-      PanelSeparator {
-        width: parent.width
-        foreground: root.foreground
-      }
-
-      // ---- Empty states.
-      Text {
-        visible: root.rows.length === 0 && root.hiddenCount === 0
-        width: parent.width
-        text: root.paused ? "Paused. Logging continues; toasts resume when the pause ends." : "Nothing changed the shape of a session. Normal coding stays silent."
-        wrapMode: Text.WordWrap
-        color: root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.body
-      }
-
-      Row {
-        visible: root.rows.length === 0 && root.hiddenCount > 0
-        width: parent.width
-        spacing: Style.spacing.md
-
-        Text {
-          anchors.verticalCenter: parent.verticalCenter
-          text: root.hiddenCount + " alert" + (root.hiddenCount === 1 ? "" : "s") + " hidden by the filter."
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.body
-        }
-
-        Button {
-          text: "Show all"
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          fontSize: Style.font.bodySmall
-          onClicked: root.showAll()
-        }
-      }
-
-      // ---- Alert cards.
-      Repeater {
-        model: root.rows
-
-        Rectangle {
-          id: card
-          required property var modelData
-          required property int index
-          readonly property bool isSelected: root.cursorActive && root.cursor === index
-          readonly property string sev: String(modelData.severity || "")
-          readonly property bool isHigh: sev === "high"
-          readonly property bool sticky: Model.isSticky(modelData)
-          readonly property bool hasPids: modelData.pids && modelData.pids.length > 0
-          readonly property bool canOpen: Model.openArgv(modelData) !== null
-          readonly property real riskValue: Model.riskValue(modelData)
-
-          width: column.width
-          implicitHeight: cardColumn.implicitHeight + Style.spacing.lg * 2
-          radius: Style.cornerRadius
-          color: isSelected ? root.selectedFill : (cardHover.hovered ? root.hoverFill : "transparent")
-
-          HoverHandler { id: cardHover }
-
-          // Severity stripe: urgent for high, fading for medium and low.
-          Rectangle {
-            x: 0
-            y: Style.spacing.lg
-            width: Style.space(3)
-            height: parent.height - Style.spacing.lg * 2
-            radius: width / 2
-            color: card.isHigh || card.sticky ? root.urgent : root.foreground
-            opacity: card.isHigh || card.sticky ? 1 : (card.sev === "medium" ? 0.55 : 0.25)
+          PanelSeparator {
+            width: parent.width
+            foreground: root.foreground
           }
 
+          // ---- Severity filter. Shared with the daemon: off hides the alerts
+          //      here and stops their toasts. Tamper alerts ignore it.
           Column {
-            id: cardColumn
-            x: Style.spacing.lg + Style.space(6)
-            y: Style.spacing.lg
-            width: parent.width - Style.spacing.lg * 2 - Style.space(6)
+            width: parent.width
             spacing: Style.spacing.sm
 
+            Text {
+              text: "SHOW AND TOAST"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.letterSpacing: 1
+            }
+
             Row {
-              id: headRow
+              id: filterRow
               width: parent.width
               spacing: Style.spacing.md
+              readonly property real cellWidth: (width - spacing * 2) / 3
 
-              OpticalGlyph {
-                width: Style.space(18)
-                height: Style.space(18)
-                text: Model.ruleGlyph(card.modelData)
-                fontFamily: root.fontFamily
-                fontSize: Style.font.icon
-                color: card.isHigh || card.sticky ? root.urgent : root.foreground
-              }
+              Repeater {
+                model: ["high", "medium", "low"]
 
-              Text {
-                width: parent.width - Style.space(18) - timeLabel.implicitWidth - openButton.width - Style.spacing.md * 3
-                text: String(card.modelData.summary || card.modelData.rule || "")
-                elide: Text.ElideRight
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                font.weight: card.isHigh ? Font.DemiBold : Font.Normal
-              }
-
-              Text {
-                id: timeLabel
-                anchors.verticalCenter: parent.verticalCenter
-                text: Model.relativeTime(card.modelData.ts, root.nowMs)
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              PanelActionButton {
-                id: openButton
-                anchors.verticalCenter: parent.verticalCenter
-                visible: card.canOpen
-                iconText: "󰉋"
-                tooltipText: "o: open folder"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.openLocation(card.modelData)
+                Button {
+                  required property string modelData
+                  required property int index
+                  width: filterRow.cellWidth
+                  text: modelData.charAt(0).toUpperCase() + modelData.slice(1)
+                  iconText: root.prefs[modelData] === false ? "󰄱" : "󰄵"
+                  tooltipText: String(index + 1)
+                  bordered: true
+                  selected: root.prefs[modelData] !== false
+                  foreground: modelData === "high" ? root.urgent : root.foreground
+                  fontFamily: root.fontFamily
+                  fontSize: Style.font.bodySmall
+                  onClicked: root.toggleSeverity(modelData)
+                }
               }
             }
 
             Text {
               width: parent.width
-              text: Model.severityLabel(card.modelData) + "  ·  " + String(card.modelData.rule || "") + (Model.whereLabel(card.modelData) !== "" ? "  ·  " + Model.whereLabel(card.modelData) : "") + (card.sticky ? "  ·  tamper" : "")
-              elide: Text.ElideRight
-              color: card.isHigh || card.sticky ? root.urgent : root.dim
+              wrapMode: Text.WordWrap
+              text: "Off hides those alerts here and stops their toasts. Tamper alerts always show."
+              color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
-              font.letterSpacing: 0.5
+            }
+          }
+
+          PanelSeparator {
+            width: parent.width
+            foreground: root.foreground
+          }
+
+          // ---- Empty states.
+          Text {
+            visible: root.rows.length === 0 && root.hiddenCount === 0
+            width: parent.width
+            text: root.paused ? "Paused. Logging continues; toasts resume when the pause ends." : "Nothing changed the shape of a session. Normal coding stays silent."
+            wrapMode: Text.WordWrap
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+          }
+
+          Row {
+            visible: root.rows.length === 0 && root.hiddenCount > 0
+            width: parent.width
+            spacing: Style.spacing.md
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.hiddenCount + " alert" + (root.hiddenCount === 1 ? "" : "s") + " hidden by the filter."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
             }
 
-            RiskMeter {
-              width: parent.width
-              value: card.riskValue
-              verdict: Model.riskVerdict(card.modelData)
+            Button {
+              text: "Show all"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.bodySmall
+              onClicked: root.showAll()
+            }
+          }
+
+          // ---- Bulk actions. Individual actions stay on every card; these
+          // apply one decision to the whole list at once.
+          Row {
+            width: parent.width
+            spacing: Style.spacing.md
+            visible: root.rows.length > 0
+
+            Button {
+              text: root.checkedCount > 0
+                ? "Approve " + root.checkedCount + " checked"
+                : "Approve checked"
+              enabled: root.checkedCount > 0
+              opacity: root.checkedCount > 0 ? 1.0 : 0.45
+              tooltipText: "Approve every checked alert. Space checks the selected one."
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.bodySmall
+              onClicked: root.approveChecked()
             }
 
-            // Equal-width action cells so the row never leaves the card.
+            Button {
+              text: root.armedBulk === "approve-all"
+                ? "Approve all " + root.rows.length + " — confirm"
+                : "Approve all"
+              tooltipText: "Allowlist every open alert. Click twice to confirm."
+              foreground: root.armedBulk === "approve-all" ? root.urgent : root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.bodySmall
+              onClicked: root.armBulk("approve-all", root.approveAll)
+            }
+
+            Button {
+              text: root.armedBulk === "dismiss-all"
+                ? "Dismiss all " + root.rows.length + " — confirm"
+                : "Dismiss all"
+              tooltipText: "Close every open alert without allowlisting. Click twice to confirm."
+              foreground: root.armedBulk === "dismiss-all" ? root.urgent : root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.bodySmall
+              onClicked: root.armBulk("dismiss-all", root.dismissAll)
+            }
+          }
+
+          // ---- Alert cards.
+          Repeater {
+            id: cardRepeater
+            model: root.rows
+
+            Rectangle {
+              id: card
+              required property var modelData
+              required property int index
+              readonly property bool isSelected: root.cursorActive && root.cursor === index
+              readonly property bool isChecked: root.isChecked(card.modelData)
+              readonly property string sev: String(modelData.severity || "")
+              readonly property bool isHigh: sev === "high"
+              readonly property bool sticky: Model.isSticky(modelData)
+              readonly property bool hasPids: modelData.pids && modelData.pids.length > 0
+              readonly property bool canOpen: Model.openArgv(modelData) !== null
+              readonly property real riskValue: Model.riskValue(modelData)
+
+              width: column.width
+              implicitHeight: cardColumn.implicitHeight + Style.spacing.lg * 2
+              radius: Style.cornerRadius
+              color: isSelected ? root.selectedFill : (cardHover.hovered ? root.hoverFill : "transparent")
+
+              HoverHandler { id: cardHover }
+
+              // Severity stripe: urgent for high, fading for medium and low.
+              Rectangle {
+                x: 0
+                y: Style.spacing.lg
+                width: Style.space(3)
+                height: parent.height - Style.spacing.lg * 2
+                radius: width / 2
+                color: card.isHigh || card.sticky ? root.urgent : root.foreground
+                opacity: card.isHigh || card.sticky ? 1 : (card.sev === "medium" ? 0.55 : 0.25)
+              }
+
+              Column {
+                id: cardColumn
+                x: Style.spacing.lg + Style.space(6)
+                y: Style.spacing.lg
+                width: parent.width - Style.spacing.lg * 2 - Style.space(6)
+                spacing: Style.spacing.sm
+
+                Row {
+                  id: headRow
+                  width: parent.width
+                  spacing: Style.spacing.md
+
+                  PanelActionButton {
+                    id: checkBox
+                    anchors.verticalCenter: parent.verticalCenter
+                    iconText: card.isChecked ? "󰄲" : "󰄱"
+                    tooltipText: card.isChecked
+                      ? "Checked — the bulk approve will include this alert"
+                      : "Check this alert for the bulk approve (space)"
+                    foreground: card.isChecked ? root.urgent : root.dim
+                    hoverColor: root.foreground
+                    fontFamily: root.fontFamily
+                    onClicked: root.toggleCheck(card.modelData)
+                  }
+
+                  OpticalGlyph {
+                    width: Style.space(18)
+                    height: Style.space(18)
+                    text: Model.ruleGlyph(card.modelData)
+                    fontFamily: root.fontFamily
+                    fontSize: Style.font.icon
+                    color: card.isHigh || card.sticky ? root.urgent : root.foreground
+                  }
+
+                  Text {
+                    width: parent.width - checkBox.width - Style.space(18) - timeLabel.implicitWidth - openButton.width - Style.spacing.md * 4
+                    text: String(card.modelData.summary || card.modelData.rule || "")
+                    elide: Text.ElideRight
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.weight: card.isHigh ? Font.DemiBold : Font.Normal
+                  }
+
+                  Text {
+                    id: timeLabel
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: Model.relativeTime(card.modelData.ts, root.nowMs)
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+
+                  PanelActionButton {
+                    id: openButton
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: card.canOpen
+                    iconText: "󰉋"
+                    tooltipText: "o: open folder"
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    onClicked: root.openLocation(card.modelData)
+                  }
+                }
+
+                Text {
+                  width: parent.width
+                  text: Model.severityLabel(card.modelData) + "  ·  " + String(card.modelData.rule || "") + (Model.whereLabel(card.modelData) !== "" ? "  ·  " + Model.whereLabel(card.modelData) : "") + (card.sticky ? "  ·  tamper" : "")
+                  elide: Text.ElideRight
+                  color: card.isHigh || card.sticky ? root.urgent : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.letterSpacing: 0.5
+                }
+
+                RiskMeter {
+                  width: parent.width
+                  value: card.riskValue
+                  verdict: Model.riskVerdict(card.modelData)
+                }
+
+                // Equal-width action cells so the row never leaves the card.
+                Row {
+                  id: actionRow
+                  width: parent.width
+                  spacing: Style.spacing.sm
+                  readonly property int count: 5
+                  readonly property real cellWidth: (width - spacing * (count - 1)) / count
+
+                  Button {
+                    width: actionRow.cellWidth
+                    text: "Approve"
+                    tooltipText: Model.isWriteRule(card.modelData) ? "a: allow writes to this file" : "a: allow this pattern in this repository"
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    fontSize: Style.font.bodySmall
+                    horizontalPadding: Style.spacing.sm
+                    onClicked: root.approveHere(card.modelData)
+                  }
+                  Button {
+                    width: actionRow.cellWidth
+                    text: "Anywhere"
+                    tooltipText: Model.isWriteRule(card.modelData) ? "A: allow this file, never expires" : "A: allow this pattern everywhere, never expires"
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    fontSize: Style.font.bodySmall
+                    horizontalPadding: Style.spacing.sm
+                    onClicked: root.approveAnywhere(card.modelData)
+                  }
+                  Button {
+                    width: actionRow.cellWidth
+                    enabled: card.hasPids
+                    opacity: card.hasPids ? 1.0 : 0.45
+                    text: "Kill"
+                    tooltipText: card.hasPids
+                      ? "x: confirm in a terminal"
+                      : "no process recorded: " + String(card.modelData.rule || "")
+                        + " is raised from a filesystem event, which names the file that "
+                        + "changed but not the writer. Investigate, approve or dismiss instead."
+                    foreground: root.urgent
+                    fontFamily: root.fontFamily
+                    fontSize: Style.font.bodySmall
+                    horizontalPadding: Style.spacing.sm
+                    onClicked: root.kill(card.modelData)
+                  }
+                  Button {
+                    width: actionRow.cellWidth
+                    text: "Investigate"
+                    tooltipText: "i or Enter: evidence with citations"
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    fontSize: Style.font.bodySmall
+                    horizontalPadding: Style.spacing.sm
+                    onClicked: root.investigate(card.modelData)
+                  }
+                  Button {
+                    width: actionRow.cellWidth
+                    text: "Dismiss"
+                    tooltipText: "d: close without allowlisting"
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    fontSize: Style.font.bodySmall
+                    horizontalPadding: Style.spacing.sm
+                    onClicked: root.dismiss(card.modelData)
+                  }
+                }
+              }
+            }
+          }
+
+          PanelSeparator {
+            width: parent.width
+            foreground: root.foreground
+          }
+
+          // ---- Footer: controls on one row, the key legend wrapped beneath so
+          //      it can never run past the popup edge.
+          Column {
+            width: parent.width
+            spacing: Style.spacing.sm
+
             Row {
-              id: actionRow
-              width: parent.width
-              spacing: Style.spacing.sm
-              readonly property int count: 4 + (card.hasPids ? 1 : 0)
-              readonly property real cellWidth: (width - spacing * (count - 1)) / count
+              spacing: Style.spacing.md
 
               Button {
-                width: actionRow.cellWidth
-                text: "Approve"
-                tooltipText: Model.isWriteRule(card.modelData) ? "a: allow writes to this file" : "a: allow this pattern in this repository"
+                text: root.paused ? "Paused" : "Pause 1h"
+                iconText: "󰏤"
+                enabled: !root.paused
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 fontSize: Style.font.bodySmall
-                horizontalPadding: Style.spacing.sm
-                onClicked: root.approveHere(card.modelData)
+                onClicked: root.pauseOneHour()
               }
               Button {
-                width: actionRow.cellWidth
-                text: "Anywhere"
-                tooltipText: Model.isWriteRule(card.modelData) ? "A: allow this file, never expires" : "A: allow this pattern everywhere, never expires"
+                text: "Refresh"
+                iconText: "󰑐"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 fontSize: Style.font.bodySmall
-                horizontalPadding: Style.spacing.sm
-                onClicked: root.approveAnywhere(card.modelData)
+                onClicked: root.refresh()
               }
               Button {
-                visible: card.hasPids
-                width: actionRow.cellWidth
-                text: "Kill"
-                tooltipText: "x: confirm in a terminal"
-                foreground: root.urgent
-                fontFamily: root.fontFamily
-                fontSize: Style.font.bodySmall
-                horizontalPadding: Style.spacing.sm
-                onClicked: root.kill(card.modelData)
-              }
-              Button {
-                width: actionRow.cellWidth
-                text: "Investigate"
-                tooltipText: "i or Enter: evidence with citations"
+                text: "Logs"
+                iconText: "󰈙"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 fontSize: Style.font.bodySmall
-                horizontalPadding: Style.spacing.sm
-                onClicked: root.investigate(card.modelData)
-              }
-              Button {
-                width: actionRow.cellWidth
-                text: "Dismiss"
-                tooltipText: "d: close without allowlisting"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                fontSize: Style.font.bodySmall
-                horizontalPadding: Style.spacing.sm
-                onClicked: root.dismiss(card.modelData)
+                onClicked: root.openLogs()
               }
             }
+
+            Text {
+              width: parent.width
+              wrapMode: Text.WordWrap
+              text: "j k move · space check · a approve · A anywhere · x kill · i investigate · d dismiss · o open · 1 2 3 filter · p pause · r refresh"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
           }
-        }
-      }
-
-      PanelSeparator {
-        width: parent.width
-        foreground: root.foreground
-      }
-
-      // ---- Footer: controls on one row, the key legend wrapped beneath so
-      //      it can never run past the popup edge.
-      Column {
-        width: parent.width
-        spacing: Style.spacing.sm
-
-        Row {
-          spacing: Style.spacing.md
-
-          Button {
-            text: root.paused ? "Paused" : "Pause 1h"
-            iconText: "󰏤"
-            enabled: !root.paused
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            fontSize: Style.font.bodySmall
-            onClicked: root.pauseOneHour()
-          }
-          Button {
-            text: "Refresh"
-            iconText: "󰑐"
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            fontSize: Style.font.bodySmall
-            onClicked: root.refresh()
-          }
-          Button {
-            text: "Logs"
-            iconText: "󰈙"
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            fontSize: Style.font.bodySmall
-            onClicked: root.openLogs()
-          }
-        }
-
-        Text {
-          width: parent.width
-          wrapMode: Text.WordWrap
-          text: "j k move · a approve · A anywhere · x kill · i investigate · d dismiss · o open · 1 2 3 filter · p pause · r refresh"
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
         }
       }
     }
